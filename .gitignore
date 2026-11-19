@@ -218,3 +218,23 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+@"
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+data/raw/*
+data/interim/*
+data/processed/*
+
+mlruns/
+*.log
+.env
+.env
+.venv/
+__pycache__/
+*.pyc
+data/interim/
+
+"@ | Set-Content .gitignore
