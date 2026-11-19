@@ -237,4 +237,24 @@ __pycache__/
 *.pyc
 data/interim/
 
+# Raw CIC-IDS2017 datasets
+data/raw/
+
+# Processed datasets
+data/processed/
+
+# Python environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# ML artifacts
+mlruns/
+artifacts/
+*.pkl
+*.joblib
+*.pt
+*.pth
+
 "@ | Set-Content .gitignore
