@@ -92,21 +92,10 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 
-
 def handle_outliers_iqr(
     df: pd.DataFrame,
     multiplier: float = 1.5
-) -> pd.DataFrame:
-    """
-    Detect and treat numerical outliers using IQR capping.
-
-    - Detects outliers using IQR.
-    - Caps values below the lower bound.
-    - Caps values above the upper bound.
-    - Excludes the target Label column.
-    - Preserves all records.
-    """
-
+):
     df = df.copy()
 
     numerical_cols = df.select_dtypes(
@@ -117,10 +106,18 @@ def handle_outliers_iqr(
 
     for col in numerical_cols:
 
+        # Do not apply IQR capping to binary features
+        if df[col].nunique() <= 2:
+            continue
+
         q1 = df[col].quantile(0.25)
         q3 = df[col].quantile(0.75)
 
         iqr = q3 - q1
+
+        # Do not cap features with zero IQR
+        if iqr == 0:
+            continue
 
         lower_bound = q1 - multiplier * iqr
         upper_bound = q3 + multiplier * iqr
@@ -130,9 +127,8 @@ def handle_outliers_iqr(
             (df[col] > upper_bound)
         )
 
-        outlier_count = outlier_mask.sum()
+        outlier_count = int(outlier_mask.sum())
 
-        # Treat outliers using IQR capping
         df[col] = df[col].clip(
             lower=lower_bound,
             upper=upper_bound
@@ -148,13 +144,15 @@ def handle_outliers_iqr(
 
     report_df = pd.DataFrame(report)
 
-    print("OUTLIER HANDLING REPORT")
+    print("\nOUTLIER HANDLING REPORT")
     print("-" * 50)
     print(report_df.to_string(index=False))
     print("-" * 50)
-    print(f"Total records preserved: {len(df)}")
+
+    print("Total records preserved:", len(df))
 
     return df, report_df
+
 # STEP 1: Execute data cleaning
 cleaned_df = clean_data(df)
 

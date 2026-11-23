@@ -1,56 +1,67 @@
+import logging
 import mlflow
 from mlflow.tracking import MlflowClient
-from pathlib import Path
 
-from src.utils.common import load_config
+# Logging configuration
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# MLflow configuration
+EXPERIMENT_NAME = "Network-Intrusion-Detection"
+REGISTERED_MODEL_NAME = "Network-Intrusion-Detection-Model"
 
 
-def register_model():
+def register_model(run_id: str):
+    """
+    Register the selected model from an MLflow run.
 
-    config = load_config()
+    Args:
+        run_id: MLflow run ID of the best model.
 
-    mlflow.set_tracking_uri(config["mlflow"]["tracking_uri"])
+    Returns:
+        Model version information.
+    """
+
+    if not run_id:
+        raise ValueError("A valid MLflow run ID is required.")
 
     client = MlflowClient()
 
-    experiment_name = config["mlflow"]["experiment_name"]
-
-    experiment = client.get_experiment_by_name(experiment_name)
-
-    if experiment is None:
-        raise ValueError("MLflow experiment not found")
-
-    runs = client.search_runs(
-        experiment_ids=[experiment.experiment_id],
-        order_by=["start_time DESC"],
-        max_results=10
-    )
-
-    if not runs:
-        raise ValueError("No MLflow runs found")
-
-    best_run = max(
-        runs,
-        key=lambda run: run.data.metrics.get("f1_score", 0)
-    )
-
-    run_id = best_run.info.run_id
-
     model_uri = f"runs:/{run_id}/model"
 
-    registered_name = "Network-Intrusion-Detection"
+    logger.info("Registering model from run: %s", run_id)
 
-    result = mlflow.register_model(
+    # Register model in MLflow Model Registry
+    model_version = mlflow.register_model(
         model_uri=model_uri,
-        name=registered_name
+        name=REGISTERED_MODEL_NAME,
     )
 
-    print("\nMODEL REGISTRATION SUCCESSFUL")
-    print("=" * 40)
-    print(f"Model Name: {registered_name}")
-    print(f"Model Version: {result.version}")
-    print(f"Run ID: {run_id}")
+    logger.info(
+        "Model registered successfully. Name: %s, Version: %s",
+        model_version.name,
+        model_version.version,
+    )
+
+    # Add metadata
+    client.set_model_version_tag(
+        name=REGISTERED_MODEL_NAME,
+        version=model_version.version,
+        key="source_run_id",
+        value=run_id,
+    )
+
+    client.set_model_version_tag(
+        name=REGISTERED_MODEL_NAME,
+        version=model_version.version,
+        key="project",
+        value="Network-Intrusion-Detection-Advanced-MLOps",
+    )
+
+    logger.info("Model registration completed.")
+
+    return model_version
 
 
 if __name__ == "__main__":
-    register_model()
+    print("Run model registration through pipeline.py.")
