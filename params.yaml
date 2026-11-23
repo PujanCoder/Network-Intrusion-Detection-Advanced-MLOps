@@ -1,0 +1,29 @@
+data:
+  X_train: data/processed/transformed/X_train_transformed.csv
+  X_test: data/processed/transformed/X_test_transformed.csv
+  y_train: data/processed/transformed/y_train.csv
+  y_test: data/processed/transformed/y_test.csv
+model:
+  random_state: 42
+  test_size: 0.20
+
+  algorithms:
+    logistic_regression:
+      max_iter: 2000
+      class_weight: balanced
+
+    decision_tree:
+      max_depth: 20
+      random_state: 42
+      class_weight: balanced
+
+    random_forest:
+      n_estimators: 200
+      max_depth: 20
+      random_state: 42
+      n_jobs: -1
+      class_weight: balanced
+
+mlflow:
+  experiment_name: Network-Intrusion-Detection
+  registered_model_name: Network-Intrusion-Detection-Model

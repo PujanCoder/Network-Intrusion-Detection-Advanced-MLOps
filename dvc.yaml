@@ -1,0 +1,24 @@
+stages:
+
+  model_training:
+
+    cmd: python -m src.models.train_model
+
+    deps:
+      - src/models/train_model.py
+      - data/processed/transformed/X_train_transformed.csv
+      - data/processed/transformed/X_test_transformed.csv
+      - data/processed/transformed/y_train.csv
+      - data/processed/transformed/y_test.csv
+
+    params:
+      - model
+      - mlflow
+      - data
+
+    outs:
+      - models/best_model.joblib
+
+    metrics:
+      - reports/model_metrics.json:
+          cache: false

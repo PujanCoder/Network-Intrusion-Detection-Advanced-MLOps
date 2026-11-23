@@ -1,0 +1,70 @@
+{
+    "best_model": "Random Forest",
+    "validation_metrics": {
+        "Logistic Regression": {
+            "accuracy": 0.9989915401423048,
+            "precision_macro": 0.998935528841592,
+            "recall_macro": 0.9990028969945324,
+            "f1_macro": 0.9989691593606917,
+            "f1_weighted": 0.9989915741815166
+        },
+        "Decision Tree": {
+            "accuracy": 0.9998039105832259,
+            "precision_macro": 0.9998122278642143,
+            "recall_macro": 0.99978686749184,
+            "f1_macro": 0.9997995401379239,
+            "f1_weighted": 0.9998039080957785
+        },
+        "Random Forest": {
+            "accuracy": 0.9998319233570508,
+            "precision_macro": 0.999819742307962,
+            "recall_macro": 0.9998366334391517,
+            "f1_macro": 0.9998281845227186,
+            "f1_weighted": 0.9998319247770411
+        }
+    },
+    "test_metrics": {
+        "accuracy": 0.9997534903525088,
+        "precision_macro": 0.9997378805750325,
+        "recall_macro": 0.9997581446090724,
+        "f1_macro": 0.9997480077674122,
+        "f1_weighted": 0.9997534928514081
+    },
+    "classification_report": {
+        "BENIGN": {
+            "precision": 0.999632005046788,
+            "recall": 0.9997896840002103,
+            "f1-score": 0.9997108383060382,
+            "support": 19019.0
+        },
+        "DDoS": {
+            "precision": 0.9998437561032772,
+            "recall": 0.9997266052179347,
+            "f1-score": 0.9997851772287862,
+            "support": 25604.0
+        },
+        "accuracy": 0.9997534903525088,
+        "macro avg": {
+            "precision": 0.9997378805750325,
+            "recall": 0.9997581446090724,
+            "f1-score": 0.9997480077674122,
+            "support": 44623.0
+        },
+        "weighted avg": {
+            "precision": 0.999753504588512,
+            "recall": 0.9997534903525088,
+            "f1-score": 0.9997534928514081,
+            "support": 44623.0
+        }
+    },
+    "confusion_matrix": [
+        [
+            19015,
+            4
+        ],
+        [
+            7,
+            25597
+        ]
+    ]
+}
