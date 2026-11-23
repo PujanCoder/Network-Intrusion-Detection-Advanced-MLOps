@@ -3,43 +3,36 @@ name: Continuous Integration
 
 on:
   push:
-    branches:
-      - main
-      - develop
-
+    branches: [main, develop]
   pull_request:
-    branches:
-      - main
-      - develop
+    branches: [main, develop]
 
 jobs:
   test:
-    name: Test Python Application
-
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.14
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.14.6"
 
       - name: Upgrade pip
-        run: |
-          python -m pip install --upgrade pip
+        run: python -m pip install --upgrade pip
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pytest
+        run: python -m pip install -r requirements.txt
 
-      - name: Validate Python syntax
+      - name: Verify dependencies
         run: |
-          python -m compileall -q src tests
+          python -c "import sklearn; print('scikit-learn:', sklearn.__version__)"
+          python -c "import evidently; print('Evidently:', evidently.__version__)"
 
-      - name: Run unit tests
-        run: |
-          python -m pytest tests/ -v
+      - name: Compile source and tests
+        run: python -m compileall -q src tests
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
