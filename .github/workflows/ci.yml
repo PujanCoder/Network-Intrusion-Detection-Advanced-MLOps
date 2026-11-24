@@ -29,7 +29,14 @@ jobs:
       - name: Verify dependencies
         run: |
           python -c "import sklearn; print('scikit-learn:', sklearn.__version__)"
+          python -c "import pandas; print('pandas:', pandas.__version__)"
           python -c "import evidently; print('Evidently:', evidently.__version__)"
+          python -c "import mlflow; print('MLflow:', mlflow.__version__)"
+          python -c "import dagshub; print('DagsHub:', dagshub.__version__)"
+          python -c "import dvc; print('DVC:', dvc.__version__)"
+
+      - name: Check dependency conflicts
+        run: python -m pip check
 
       - name: Compile source and tests
         run: python -m compileall -q src tests
