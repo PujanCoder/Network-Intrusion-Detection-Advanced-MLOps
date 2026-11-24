@@ -1,0 +1,4 @@
+[core]
+    remote = origin
+['remote "origin"']
+    url = https://dagshub.com/pujanpandey012/Network-Intrusion-Detection-Advanced-MLOps.dvc
