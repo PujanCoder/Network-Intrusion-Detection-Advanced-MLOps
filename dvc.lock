@@ -59,3 +59,84 @@ stages:
       hash: md5
       md5: 973d8e12544ef6459a185f2cbda1edfc
       size: 2191
+  ml_pipeline:
+    cmd: python -m src.pipelines.pipeline
+    deps:
+    - path: 
+        data/raw/MachineLearningCSV/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv
+      hash: md5
+      md5: b2b2764e4c8a4c390506de7ee81c32ee
+      size: 77123859
+    - path: src/features/data_cleaning.py
+      hash: md5
+      md5: 11b8dc8bc7c0d24834987647722f5c40
+      size: 6115
+    - path: src/features/data_preprocessing.py
+      hash: md5
+      md5: f45b85ae65a6274951921e849978a69c
+      size: 3944
+    - path: src/features/feature_transformation.py
+      hash: md5
+      md5: 9b083f33b9daab9bdef7a12715ee2163
+      size: 3219
+    - path: src/features/transformation_validation.py
+      hash: md5
+      md5: 1fe6e3fce28592819f58f42ca5be442c
+      size: 1836
+    - path: src/models/evaluate_model.py
+      hash: md5
+      md5: 36f1d08a26d8d1f5ad70dc09787cb182
+      size: 11127
+    - path: src/models/train_model.py
+      hash: md5
+      md5: 3d464c509436557bb8bbf2d4d7c1bb11
+      size: 10983
+    - path: src/pipelines/pipeline.py
+      hash: md5
+      md5: 07bb469f67f557de16822850182354c1
+      size: 9970
+    params:
+      params.yaml:
+        data:
+          X_train: data/processed/transformed/X_train_transformed.csv
+          X_test: data/processed/transformed/X_test_transformed.csv
+          y_train: data/processed/transformed/y_train.csv
+          y_test: data/processed/transformed/y_test.csv
+        mlflow:
+          experiment_name: Network-Intrusion-Detection
+          registered_model_name: Network-Intrusion-Detection-Model
+        model:
+          random_state: 42
+          test_size: 0.2
+          algorithms:
+            logistic_regression:
+              max_iter: 2000
+              class_weight: balanced
+            decision_tree:
+              max_depth: 20
+              random_state: 42
+              class_weight: balanced
+            random_forest:
+              n_estimators: 200
+              max_depth: 20
+              random_state: 42
+              n_jobs: -1
+              class_weight: balanced
+    outs:
+    - path: data/processed/cleaned_dataset.csv
+      hash: md5
+      md5: 1f2eb4cae58165a269cad382664f5cce
+      size: 81779491
+    - path: data/processed/transformed
+      hash: md5
+      md5: dab7daad8ea6e3d314ce87aace79d511.dir
+      size: 539296078
+      nfiles: 8
+    - path: models/best_model.joblib
+      hash: md5
+      md5: 5a60a301926b7b183e028210a9509211
+      size: 2698297
+    - path: reports/training_results.json
+      hash: md5
+      md5: a6d400f9365f95f63e3990d288f19e9c
+      size: 1254

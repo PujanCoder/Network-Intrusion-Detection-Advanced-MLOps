@@ -1,4 +1,3 @@
-
 import json
 import logging
 from pathlib import Path
@@ -23,6 +22,7 @@ from sklearn.metrics import (
     recall_score,
     f1_score,
 )
+
 
 # ==========================================================
 # LOGGING
@@ -80,12 +80,12 @@ def initialize_mlflow():
 
     logger.info(
         "MLflow tracking URI: %s",
-        mlflow.get_tracking_uri()
+        mlflow.get_tracking_uri(),
     )
 
     logger.info(
         "MLflow experiment: %s",
-        experiment_name
+        experiment_name,
     )
 
 
@@ -166,35 +166,35 @@ def calculate_metrics(model, X, y):
 
         "accuracy": accuracy_score(
             y,
-            predictions
+            predictions,
         ),
 
         "precision_macro": precision_score(
             y,
             predictions,
             average="macro",
-            zero_division=0
+            zero_division=0,
         ),
 
         "recall_macro": recall_score(
             y,
             predictions,
             average="macro",
-            zero_division=0
+            zero_division=0,
         ),
 
         "f1_macro": f1_score(
             y,
             predictions,
             average="macro",
-            zero_division=0
+            zero_division=0,
         ),
 
         "f1_weighted": f1_score(
             y,
             predictions,
             average="weighted",
-            zero_division=0
+            zero_division=0,
         ),
 
         "ddos_precision": precision_score(
@@ -202,7 +202,7 @@ def calculate_metrics(model, X, y):
             predictions,
             pos_label="DDoS",
             average="binary",
-            zero_division=0
+            zero_division=0,
         ),
 
         "ddos_recall": recall_score(
@@ -210,7 +210,7 @@ def calculate_metrics(model, X, y):
             predictions,
             pos_label="DDoS",
             average="binary",
-            zero_division=0
+            zero_division=0,
         ),
 
         "ddos_f1": f1_score(
@@ -218,7 +218,7 @@ def calculate_metrics(model, X, y):
             predictions,
             pos_label="DDoS",
             average="binary",
-            zero_division=0
+            zero_division=0,
         ),
 
     }
@@ -254,7 +254,7 @@ def train_models(X_train, X_test, y_train, y_test):
 
         random_state=random_state,
 
-        stratify=y_train
+        stratify=y_train,
 
     )
 
@@ -264,6 +264,7 @@ def train_models(X_train, X_test, y_train, y_test):
     results = {}
 
     best_model_name = None
+    best_model = None
     best_score = -1
 
     # ------------------------------------------------------
@@ -281,50 +282,47 @@ def train_models(X_train, X_test, y_train, y_test):
             # Train
             model.fit(
                 X_subtrain,
-                y_subtrain
+                y_subtrain,
             )
 
             # Validate
             validation_metrics = calculate_metrics(
                 model,
                 X_val,
-                y_val
+                y_val,
             )
+
+            # Store validation metrics
+            results[model_name] = {
+                key: float(value)
+                for key, value in validation_metrics.items()
+            }
 
             # MLflow tags
-            mlflow.set_tag(
-                "model_role",
-                "candidate"
-            )
-
-            mlflow.set_tag(
-                "model_name",
-                model_name
-            )
+            mlflow.set_tag("model_role", "candidate")
+            mlflow.set_tag("model_name", model_name)
 
             # Log parameters
-            mlflow.log_params(
-                model.get_params()
-            )
+            mlflow.log_params(model.get_params())
 
             mlflow.log_param(
                 "training_samples",
-                len(X_subtrain)
+                len(X_subtrain),
             )
 
             mlflow.log_param(
                 "validation_samples",
-                len(X_val)
+                len(X_val),
             )
 
             mlflow.log_param(
                 "validation_test_size",
-                test_size
+                test_size,
             )
 
             mlflow.log_param(
                 "validation_random_state",
-                random_state
+                random_state,
             )
 
             # Log validation metrics
@@ -335,21 +333,34 @@ def train_models(X_train, X_test, y_train, y_test):
                 }
             )
 
-            # Log trained model
-            mlflow.sklearn.log_model(
+            # Log model to MLflow
+            model_info = mlflow.sklearn.log_model(
                 sk_model=model,
-                artifact_path="model"
+                name="model",
+                skops_trusted_types=[
+                    "sklearn.tree._tree.Tree"
+                ],
             )
 
-            results[model_name] = validation_metrics
+            # Save logged model URI in run metadata
+            mlflow.set_tag(
+                "model_uri",
+                model_info.model_uri,
+            )
+
+            logger.info(
+                "%s logged successfully: %s",
+                model_name,
+                model_info.model_uri,
+            )
 
             logger.info(
                 "%s validation F1: %.5f",
                 model_name,
-                validation_metrics["f1_macro"]
+                validation_metrics["f1_macro"],
             )
 
-            # Select best candidate using validation F1
+            # Select best candidate
             if validation_metrics["f1_macro"] > best_score:
 
                 best_score = validation_metrics["f1_macro"]
@@ -357,6 +368,9 @@ def train_models(X_train, X_test, y_train, y_test):
                 best_model_name = model_name
 
                 best_model = model
+
+    if best_model is None:
+        raise RuntimeError("No candidate model was successfully trained.")
 
     # ------------------------------------------------------
     # SAVE BEST VALIDATION MODEL
@@ -366,7 +380,7 @@ def train_models(X_train, X_test, y_train, y_test):
 
     joblib.dump(
         best_model,
-        model_path
+        model_path,
     )
 
     # ------------------------------------------------------
@@ -388,13 +402,13 @@ def train_models(X_train, X_test, y_train, y_test):
     with open(
         metrics_path,
         "w",
-        encoding="utf-8"
+        encoding="utf-8",
     ) as file:
 
         json.dump(
             training_results,
             file,
-            indent=4
+            indent=4,
         )
 
     logger.info("Candidate model training completed.")
@@ -420,7 +434,7 @@ def main():
         X_train,
         X_test,
         y_train,
-        y_test
+        y_test,
     )
 
 

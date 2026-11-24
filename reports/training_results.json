@@ -1,0 +1,36 @@
+{
+    "best_model": "Random Forest",
+    "best_validation_f1": 1.0,
+    "validation_metrics": {
+        "Logistic Regression": {
+            "accuracy": 0.9993557062020281,
+            "precision_macro": 0.9992868535052739,
+            "recall_macro": 0.9993962997039183,
+            "f1_macro": 0.9993414351423426,
+            "f1_weighted": 0.999355741506267,
+            "ddos_precision": 0.9997557401074744,
+            "ddos_recall": 0.9991212224771762,
+            "ddos_f1": 0.9994383805826191
+        },
+        "Decision Tree": {
+            "accuracy": 0.9998319233570508,
+            "precision_macro": 0.999819742307962,
+            "recall_macro": 0.9998366334391517,
+            "f1_macro": 0.9998281845227186,
+            "f1_weighted": 0.9998319247770411,
+            "ddos_precision": 0.9999023485181388,
+            "ddos_recall": 0.9998047161060392,
+            "ddos_f1": 0.9998535299287179
+        },
+        "Random Forest": {
+            "accuracy": 1.0,
+            "precision_macro": 1.0,
+            "recall_macro": 1.0,
+            "f1_macro": 1.0,
+            "f1_weighted": 1.0,
+            "ddos_precision": 1.0,
+            "ddos_recall": 1.0,
+            "ddos_f1": 1.0
+        }
+    }
+}

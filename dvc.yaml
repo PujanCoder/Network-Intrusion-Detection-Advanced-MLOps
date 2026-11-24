@@ -1,15 +1,16 @@
 stages:
-
-  model_training:
-
-    cmd: python -m src.models.train_model
+  ml_pipeline:
+    cmd: python -m src.pipelines.pipeline
 
     deps:
+      - src/pipelines/pipeline.py
+      - src/features/data_cleaning.py
+      - src/features/data_preprocessing.py
+      - src/features/feature_transformation.py
+      - src/features/transformation_validation.py
       - src/models/train_model.py
-      - data/processed/transformed/X_train_transformed.csv
-      - data/processed/transformed/X_test_transformed.csv
-      - data/processed/transformed/y_train.csv
-      - data/processed/transformed/y_test.csv
+      - src/models/evaluate_model.py
+      - data/raw/MachineLearningCSV/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv
 
     params:
       - model
@@ -17,8 +18,10 @@ stages:
       - data
 
     outs:
+      - data/processed/cleaned_dataset.csv
+      - data/processed/transformed
       - models/best_model.joblib
 
     metrics:
-      - reports/model_metrics.json:
+      - reports/training_results.json:
           cache: false

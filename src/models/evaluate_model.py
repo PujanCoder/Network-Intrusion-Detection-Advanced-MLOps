@@ -1,4 +1,3 @@
-
 import json
 import logging
 from pathlib import Path
@@ -69,7 +68,7 @@ def initialize_mlflow():
 
     logger.info(
         "MLflow tracking URI: %s",
-        mlflow.get_tracking_uri()
+        mlflow.get_tracking_uri(),
     )
 
 
@@ -108,25 +107,21 @@ def load_evaluation_data():
     if len(X_test) != len(y_test):
         raise ValueError("Testing feature-label mismatch.")
 
-    # Use exactly the same split as train_model.py
+    # Reproduce the same validation split used during training.
     test_size = params["model"]["test_size"]
 
     random_state = params["model"]["random_state"]
 
     X_fit, X_val, y_fit, y_val = train_test_split(
-
         X_train,
         y_train,
-
         test_size=test_size,
-
         random_state=random_state,
-
-        stratify=y_train
-
+        stratify=y_train,
     )
 
     logger.info("Validation dataset: %s", X_val.shape)
+
     logger.info("Testing dataset: %s", X_test.shape)
 
     return X_val, y_val, X_test, y_test
@@ -152,7 +147,7 @@ def calculate_metrics(model, X, y):
                 predictions,
                 average="binary",
                 pos_label="DDoS",
-                zero_division=0
+                zero_division=0,
             )
         ),
 
@@ -162,7 +157,7 @@ def calculate_metrics(model, X, y):
                 predictions,
                 average="binary",
                 pos_label="DDoS",
-                zero_division=0
+                zero_division=0,
             )
         ),
 
@@ -172,7 +167,7 @@ def calculate_metrics(model, X, y):
                 predictions,
                 average="binary",
                 pos_label="DDoS",
-                zero_division=0
+                zero_division=0,
             )
         ),
 
@@ -192,7 +187,7 @@ def calculate_metrics(model, X, y):
             metrics["roc_auc"] = float(
                 roc_auc_score(
                     (y == "DDoS").astype(int),
-                    probabilities[:, ddos_index]
+                    probabilities[:, ddos_index],
                 )
             )
 
@@ -238,7 +233,7 @@ def get_completed_model_runs(experiment_name):
 
         order_by=[
             "start_time DESC"
-        ]
+        ],
 
     )
 
@@ -251,7 +246,7 @@ def get_completed_model_runs(experiment_name):
 
     logger.info(
         "Found %d candidate runs.",
-        len(runs)
+        len(runs),
     )
 
     return runs
@@ -287,15 +282,26 @@ def evaluate_models(
 
         run_id = run["run_id"]
 
-        model_uri = f"runs:/{run_id}/model"
+        # Correct Pandas Series access
+        model_uri = run.get("tags.model_uri")
+
+        if pd.isna(model_uri) or not model_uri:
+
+            logger.warning(
+                "No logged model URI found for run %s",
+                run_id,
+            )
+
+            continue
 
         try:
 
             logger.info(
                 "Loading model from run: %s",
-                run_id
+                run_id,
             )
 
+            # Load logged MLflow model
             model = mlflow.sklearn.load_model(
                 model_uri
             )
@@ -303,7 +309,7 @@ def evaluate_models(
             validation_metrics = calculate_metrics(
                 model,
                 X_val,
-                y_val
+                y_val,
             )
 
             results.append({
@@ -312,7 +318,7 @@ def evaluate_models(
 
                 "model_uri": model_uri,
 
-                **validation_metrics
+                **validation_metrics,
 
             })
 
@@ -321,7 +327,7 @@ def evaluate_models(
             logger.info(
                 "Run %s | Validation F1: %.5f",
                 run_id,
-                validation_metrics["f1_score"]
+                validation_metrics["f1_score"],
             )
 
         except Exception as error:
@@ -329,7 +335,7 @@ def evaluate_models(
             logger.exception(
                 "Could not evaluate run %s: %s",
                 run_id,
-                error
+                error,
             )
 
     if not results:
@@ -346,14 +352,14 @@ def evaluate_models(
 
     results_df = results_df.sort_values(
         by="f1_score",
-        ascending=False
+        ascending=False,
     ).reset_index(drop=True)
 
     comparison_path = REPORT_DIR / "model_comparison.csv"
 
     results_df.to_csv(
         comparison_path,
-        index=False
+        index=False,
     )
 
     # ------------------------------------------------------
@@ -368,12 +374,12 @@ def evaluate_models(
 
     logger.info(
         "Best model selected: %s",
-        best_run_id
+        best_run_id,
     )
 
     logger.info(
         "Best validation F1: %.5f",
-        best_result["f1_score"]
+        best_result["f1_score"],
     )
 
     # ------------------------------------------------------
@@ -387,7 +393,7 @@ def evaluate_models(
     test_metrics = calculate_metrics(
         best_model,
         X_test,
-        y_test
+        y_test,
     )
 
     test_predictions = best_model.predict(
@@ -398,13 +404,13 @@ def evaluate_models(
         y_test,
         test_predictions,
         zero_division=0,
-        output_dict=True
+        output_dict=True,
     )
 
     confusion = confusion_matrix(
         y_test,
         test_predictions,
-        labels=["BENIGN", "DDoS"]
+        labels=["BENIGN", "DDoS"],
     )
 
     # ------------------------------------------------------
@@ -429,7 +435,7 @@ def evaluate_models(
                 "precision",
                 "recall",
                 "f1_score",
-                "roc_auc"
+                "roc_auc",
             ]
 
         },
@@ -438,7 +444,7 @@ def evaluate_models(
 
         "classification_report": report,
 
-        "confusion_matrix": confusion.tolist()
+        "confusion_matrix": confusion.tolist(),
 
     }
 
@@ -447,23 +453,23 @@ def evaluate_models(
     with open(
         results_path,
         "w",
-        encoding="utf-8"
+        encoding="utf-8",
     ) as file:
 
         json.dump(
             evaluation_results,
             file,
-            indent=4
+            indent=4,
         )
 
     logger.info(
         "Model comparison saved: %s",
-        comparison_path
+        comparison_path,
     )
 
     logger.info(
         "Evaluation results saved: %s",
-        results_path
+        results_path,
     )
 
     logger.info("Model evaluation completed successfully.")

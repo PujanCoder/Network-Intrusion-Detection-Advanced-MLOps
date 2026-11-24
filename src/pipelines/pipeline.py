@@ -1,8 +1,8 @@
-
 import logging
-import pandas as pd
-
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 from src.features.data_cleaning import (
     clean_data,
@@ -23,12 +23,12 @@ from src.features.transformation_validation import (
 )
 
 from src.models.train_model import train_models
+
 from src.models.evaluate_model import evaluate_models
-from src.models.register_model import register_model
 
 
 # ============================================================
-# LOGGING CONFIGURATION
+# LOGGING
 # ============================================================
 
 logging.basicConfig(
@@ -65,7 +65,6 @@ REPORT_DIR = ROOT_DIR / "reports"
 # ============================================================
 
 def validate_input_data(df: pd.DataFrame) -> None:
-    """Validate the cleaned dataset."""
 
     if df.empty:
         raise ValueError("Input dataset is empty.")
@@ -74,28 +73,18 @@ def validate_input_data(df: pd.DataFrame) -> None:
         raise ValueError("Target column 'Label' not found.")
 
     if df["Label"].nunique() < 2:
-        raise ValueError(
-            "Dataset must contain at least two classes."
-        )
+        raise ValueError("Dataset must contain at least two classes.")
 
     if df.isnull().sum().sum() > 0:
-        raise ValueError(
-            "Dataset contains missing values."
-        )
+        raise ValueError("Dataset contains missing values.")
 
-    if not np.isfinite(
-        df.select_dtypes(include="number").to_numpy()
-    ).all():
-        raise ValueError(
-            "Dataset contains infinite numerical values."
-        )
+    numeric_data = df.select_dtypes(include=np.number)
+
+    if not np.isfinite(numeric_data.to_numpy()).all():
+        raise ValueError("Dataset contains infinite numerical values.")
 
     logger.info("Input data validation passed.")
 
-
-# ============================================================
-# PROCESSED DATA VALIDATION
-# ============================================================
 
 def validate_processed_data(
     X_train: pd.DataFrame,
@@ -103,7 +92,6 @@ def validate_processed_data(
     y_train: pd.Series,
     y_test: pd.Series,
 ) -> None:
-    """Validate final datasets before model training."""
 
     if X_train.empty or X_test.empty:
         raise ValueError("Training or testing dataset is empty.")
@@ -115,9 +103,7 @@ def validate_processed_data(
         raise ValueError("Testing feature-label mismatch.")
 
     if list(X_train.columns) != list(X_test.columns):
-        raise ValueError(
-            "Training and testing feature columns do not match."
-        )
+        raise ValueError("Training and testing features do not match.")
 
     for name, data in {
         "X_train": X_train,
@@ -125,14 +111,13 @@ def validate_processed_data(
     }.items():
 
         if data.isnull().sum().sum() > 0:
-            raise ValueError(
-                f"{name} contains missing values."
-            )
+            raise ValueError(f"{name} contains missing values.")
 
         if not np.isfinite(data.to_numpy()).all():
-            raise ValueError(
-                f"{name} contains infinite values."
-            )
+            raise ValueError(f"{name} contains infinite values.")
+
+    if y_train.isnull().any() or y_test.isnull().any():
+        raise ValueError("Target datasets contain missing values.")
 
     logger.info("Processed dataset validation passed.")
 
@@ -144,18 +129,25 @@ def validate_processed_data(
 def run_pipeline():
 
     logger.info("=" * 65)
-    logger.info("NETWORK INTRUSION DETECTION - COMPLETE MLOPS PIPELINE")
+
+    logger.info(
+        "NETWORK INTRUSION DETECTION - COMPLETE MLOPS PIPELINE"
+    )
+
     logger.info("=" * 65)
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+    TRANSFORMED_DIR.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------------
     # STEP 1: DATA INGESTION
     # --------------------------------------------------------
 
-    logger.info("[1/10] DATA INGESTION")
+    logger.info("[1/9] DATA INGESTION")
 
     if not RAW_DATA_PATH.exists():
+
         raise FileNotFoundError(
             f"Raw dataset not found: {RAW_DATA_PATH}"
         )
@@ -174,19 +166,31 @@ def run_pipeline():
     # STEP 2: DATA CLEANING
     # --------------------------------------------------------
 
-    logger.info("[2/10] DATA CLEANING")
-
+    logger.info("[2/9] DATA CLEANING")
     df = clean_data(df)
 
     validate_input_data(df)
 
     logger.info("Cleaned dataset shape: %s", df.shape)
 
+    # Save cleaned dataset for DVC tracking
+    cleaned_dataset_path = PROCESSED_DIR / "cleaned_dataset.csv"
+
+    df.to_csv(
+        cleaned_dataset_path,
+        index=False,
+    )
+
+    logger.info(
+        "Cleaned dataset saved: %s",
+        cleaned_dataset_path,
+    )
+
     # --------------------------------------------------------
     # STEP 3: DATA SPLITTING
     # --------------------------------------------------------
 
-    logger.info("[3/10] DATA SPLITTING")
+    logger.info("[3/9] DATA SPLITTING")
 
     X_train, X_test, y_train, y_test = split_data(
         df,
@@ -196,15 +200,17 @@ def run_pipeline():
     )
 
     logger.info("Training features: %s", X_train.shape)
+
     logger.info("Testing features: %s", X_test.shape)
 
     # --------------------------------------------------------
     # STEP 4: OUTLIER HANDLING
     # --------------------------------------------------------
 
-    logger.info("[4/10] OUTLIER HANDLING")
+    logger.info("[4/9] OUTLIER HANDLING")
 
     train_df = X_train.copy()
+
     train_df["Label"] = y_train
 
     processed_train, outlier_report = handle_outliers_iqr(
@@ -212,15 +218,16 @@ def run_pipeline():
     )
 
     X_train = processed_train.drop(columns=["Label"])
+
     y_train = processed_train["Label"]
 
-    X_test = X_test.copy()
-
+    # Apply training-derived bounds to testing data.
     for _, row in outlier_report.iterrows():
 
         feature = row["Feature"]
 
         if feature in X_test.columns:
+
             X_test[feature] = X_test[feature].clip(
                 lower=row["Lower Bound"],
                 upper=row["Upper Bound"],
@@ -237,7 +244,7 @@ def run_pipeline():
     # STEP 5: DATA DRIFT VALIDATION
     # --------------------------------------------------------
 
-    logger.info("[5/10] DATA DRIFT VALIDATION")
+    logger.info("[5/9] DATA DRIFT VALIDATION")
 
     snapshot = validate_data_drift(
         reference_data=X_train,
@@ -246,10 +253,12 @@ def run_pipeline():
 
     drift_report_path = REPORT_DIR / "data_drift_report.html"
 
-    snapshot.save_html(str(drift_report_path))
+    snapshot.save_html(
+        str(drift_report_path)
+    )
 
     logger.info(
-        "Data drift report saved: %s",
+        "Drift report saved: %s",
         drift_report_path,
     )
 
@@ -257,7 +266,7 @@ def run_pipeline():
     # STEP 6: FEATURE TRANSFORMATION
     # --------------------------------------------------------
 
-    logger.info("[6/10] FEATURE TRANSFORMATION")
+    logger.info("[6/9] FEATURE TRANSFORMATION")
 
     transform_features(
         X_train,
@@ -270,7 +279,7 @@ def run_pipeline():
     # STEP 7: TRANSFORMATION VALIDATION
     # --------------------------------------------------------
 
-    logger.info("[7/10] TRANSFORMATION VALIDATION")
+    logger.info("[7/9] TRANSFORMATION VALIDATION")
 
     remove_constant_features()
 
@@ -307,36 +316,24 @@ def run_pipeline():
         X_test_final.shape,
     )
 
-        # ==========================================================
-    # 8. MODEL TRAINING
-    # ==========================================================
+    # --------------------------------------------------------
+    # STEP 8: MODEL TRAINING
+    # --------------------------------------------------------
 
-    logger.info("[8/10] MODEL TRAINING")
+    logger.info("[8/9] MODEL TRAINING")
 
-    DATA_DIR = (
-        Path(__file__).resolve().parents[2]
-        / "data"
-        / "processed"
-        / "transformed"
-    )
-
-    # Load selected training and testing datasets
-    X_train = pd.read_csv(DATA_DIR / "X_train_selected.csv")
-    X_test = pd.read_csv(DATA_DIR / "X_test_selected.csv")
-
-    y_train = pd.read_csv(DATA_DIR / "y_train.csv").squeeze("columns")
-    y_test = pd.read_csv(DATA_DIR / "y_test.csv").squeeze("columns")
-
-    logger.info("Training features: %s", X_train.shape)
-    logger.info("Testing features: %s", X_test.shape)
-
-    # Train candidate models
     train_results = train_models(
-        X_train,
-        X_test,
-        y_train,
-        y_test
+        X_train_final,
+        X_test_final,
+        y_train_final,
+        y_test_final,
     )
+
+    if not train_results:
+
+        raise RuntimeError(
+            "Model training returned no results."
+        )
 
     logger.info("Model training completed successfully.")
 
@@ -344,11 +341,14 @@ def run_pipeline():
     # STEP 9: MODEL EVALUATION
     # --------------------------------------------------------
 
-    logger.info("[9/10] MODEL EVALUATION")
+    logger.info("[9/9] MODEL EVALUATION")
 
-    evaluation_results = evaluate_models()
+    evaluation_results = evaluate_models(
+        experiment_name="Network-Intrusion-Detection"
+    )
 
     if not evaluation_results:
+
         raise RuntimeError(
             "Model evaluation returned no results."
         )
@@ -356,39 +356,34 @@ def run_pipeline():
     best_run_id = evaluation_results.get("best_run_id")
 
     if not best_run_id:
+
         raise RuntimeError(
-            "No best model run ID returned from evaluation."
+            "No best model run ID returned."
         )
 
-    logger.info("Best model run ID: %s", best_run_id)
-
-    # --------------------------------------------------------
-    # STEP 10: MODEL REGISTRATION
-    # --------------------------------------------------------
-
-    logger.info("[10/10] MODEL REGISTRATION")
-
-    registration_result = register_model(best_run_id)
-
-    if registration_result is None:
-        raise RuntimeError(
-            "Model registration did not return a result."
-        )
-
-    logger.info("Model registration completed.")
+    logger.info(
+        "Best model run ID: %s",
+        best_run_id,
+    )
 
     # --------------------------------------------------------
     # PIPELINE COMPLETION
     # --------------------------------------------------------
 
     logger.info("=" * 65)
-    logger.info("COMPLETE MLOPS PIPELINE EXECUTED SUCCESSFULLY")
+
+    logger.info(
+        "COMPLETE MLOPS PIPELINE EXECUTED SUCCESSFULLY"
+    )
+
     logger.info("=" * 65)
 
     return {
+
         "training_results": train_results,
+
         "evaluation_results": evaluation_results,
-        "registration_result": registration_result,
+
     }
 
 
@@ -397,6 +392,5 @@ def run_pipeline():
 # ============================================================
 
 if __name__ == "__main__":
-    import numpy as np
 
     run_pipeline()
