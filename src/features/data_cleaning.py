@@ -1,8 +1,9 @@
-from sklearn.model_selection import train_test_split
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing  import OneHotEncoder, LabelEncoder , StandardScaler , PowerTransformer
+
+import logging
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -15,22 +16,20 @@ DATA_PATH = (
     / "Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv"
 )
 
-df = pd.read_csv(DATA_PATH)
+OUTPUT_PATH = (
+    ROOT_DIR
+    / "data"
+    / "processed"
+    / "cleaned_dataset.csv"
+)
 
-print(f"Dataset loaded successfully: {df.shape}")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-print("\nActual column names:")
-for col in df.columns:
-    print(repr(col))
-
-df.columns = df.columns.str.strip()
-
-import numpy as np
-import pandas as pd
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Clean network intrusion detection dataset.
+    Clean the network intrusion detection dataset.
 
     Operations:
     1. Remove duplicate records.
@@ -40,25 +39,34 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     5. Handle missing categorical values.
     """
 
-    df = df.copy()
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("Input must be a pandas DataFrame.")
 
+    df = df.copy()
     initial_rows = len(df)
 
-    # 1. Remove duplicate records
-    duplicates = df.duplicated().sum()
+    # 1. Normalize column names
+    df.columns = (
+        df.columns
+        .str.replace("\ufeff", "", regex=False)
+        .str.strip()
+    )
+
+    # 2. Remove duplicate records
+    duplicates = int(df.duplicated().sum())
     df = df.drop_duplicates()
 
-    # 2. Replace infinite values
+    # 3. Replace infinite values with NaN
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
 
-    # 3. Remove rows with missing target labels
+    # 4. Remove rows with missing target labels
     if "Label" not in df.columns:
         raise ValueError("Target column 'Label' not found.")
 
-    missing_labels = df["Label"].isna().sum()
+    missing_labels = int(df["Label"].isna().sum())
     df = df.dropna(subset=["Label"])
 
-    # 4. Identify numerical and categorical columns
+    # 5. Identify numerical and categorical columns
     numerical_cols = df.select_dtypes(
         include=np.number
     ).columns.tolist()
@@ -67,35 +75,46 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
         exclude=np.number
     ).columns.tolist()
 
-    # 5. Handle missing numerical values
+    # 6. Handle missing numerical values
     for col in numerical_cols:
         if df[col].isna().any():
-            df[col] = df[col].fillna(df[col].median())
+            median_value = df[col].median()
+            df[col] = df[col].fillna(median_value)
 
-    # 6. Handle missing categorical values
+    # 7. Handle missing categorical values
     for col in categorical_cols:
         if col != "Label" and df[col].isna().any():
             df[col] = df[col].fillna("Unknown")
 
-    # 7. Cleaning report
-    print("DATA CLEANING REPORT")
-    print("-" * 35)
-    print(f"Initial rows: {initial_rows}")
-    print(f"Duplicates removed: {duplicates}")
-    print(f"Missing labels removed: {missing_labels}")
-    print(f"Final rows: {len(df)}")
-    print(f"Remaining missing values: {df.isna().sum().sum()}")
+    # 8. Cleaning report
+    logger.info("DATA CLEANING REPORT")
+    logger.info("-" * 35)
+    logger.info("Initial rows: %s", initial_rows)
+    logger.info("Duplicates removed: %s", duplicates)
+    logger.info("Missing labels removed: %s", missing_labels)
+    logger.info("Final rows: %s", len(df))
+    logger.info("Remaining missing values: %s", df.isna().sum().sum())
 
     return df
-
-
-
 
 
 def handle_outliers_iqr(
     df: pd.DataFrame,
     multiplier: float = 1.5
 ):
+    """
+    Detect and cap numerical outliers using the IQR method.
+
+    Binary features and features with zero IQR are skipped.
+    The number of rows is preserved.
+    """
+
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("Input must be a pandas DataFrame.")
+
+    if multiplier <= 0:
+        raise ValueError("Multiplier must be greater than zero.")
+
     df = df.copy()
 
     numerical_cols = df.select_dtypes(
@@ -106,7 +125,7 @@ def handle_outliers_iqr(
 
     for col in numerical_cols:
 
-        # Do not apply IQR capping to binary features
+        # Skip binary features
         if df[col].nunique() <= 2:
             continue
 
@@ -115,7 +134,7 @@ def handle_outliers_iqr(
 
         iqr = q3 - q1
 
-        # Do not cap features with zero IQR
+        # Skip zero-IQR features
         if iqr == 0:
             continue
 
@@ -123,8 +142,8 @@ def handle_outliers_iqr(
         upper_bound = q3 + multiplier * iqr
 
         outlier_mask = (
-            (df[col] < lower_bound) |
-            (df[col] > upper_bound)
+            (df[col] < lower_bound)
+            | (df[col] > upper_bound)
         )
 
         outlier_count = int(outlier_mask.sum())
@@ -142,42 +161,83 @@ def handle_outliers_iqr(
             "Upper Bound": upper_bound
         })
 
-    report_df = pd.DataFrame(report)
+    report_df = pd.DataFrame(
+        report,
+        columns=[
+            "Feature",
+            "Outliers Detected",
+            "Outliers Treated",
+            "Lower Bound",
+            "Upper Bound"
+        ]
+    )
 
-    print("\nOUTLIER HANDLING REPORT")
-    print("-" * 50)
-    print(report_df.to_string(index=False))
-    print("-" * 50)
+    logger.info("OUTLIER HANDLING REPORT")
+    logger.info("-" * 50)
 
-    print("Total records preserved:", len(df))
+    if not report_df.empty:
+        logger.info("\n%s", report_df.to_string(index=False))
+    else:
+        logger.info("No eligible numerical features required outlier treatment.")
+
+    logger.info("Total records preserved: %s", len(df))
 
     return df, report_df
 
-# STEP 1: Execute data cleaning
-cleaned_df = clean_data(df)
 
-# STEP 2: Execute outlier detection and treatment
-processed_df, outlier_report = handle_outliers_iqr(cleaned_df)
+def main():
+    """
+    Execute the complete data-cleaning workflow.
+    """
 
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(
+            f"Raw dataset not found: {DATA_PATH}"
+        )
 
-print("Missing values:", processed_df.isnull().sum().sum())
+    # 1. Load raw dataset
+    df = pd.read_csv(DATA_PATH)
 
-print("Duplicates:", processed_df.duplicated().sum())
+    logger.info("Dataset loaded successfully: %s", df.shape)
 
-print(
-    "Infinite values:",
-    np.isinf(
+    logger.info("Actual column names:")
+    for col in df.columns:
+        logger.info("%r", col)
+
+    # 2. Clean dataset
+    cleaned_df = clean_data(df)
+
+    # 3. Handle outliers
+    processed_df, outlier_report = handle_outliers_iqr(
+        cleaned_df
+    )
+
+    # 4. Validate cleaned dataset
+    missing_values = processed_df.isnull().sum().sum()
+    duplicates = processed_df.duplicated().sum()
+
+    infinite_values = np.isinf(
         processed_df.select_dtypes(include=np.number)
     ).sum().sum()
-)
 
-print("Final shape:", processed_df.shape)
-# Save cleaned dataset
+    logger.info("Missing values: %s", missing_values)
+    logger.info("Duplicates: %s", duplicates)
+    logger.info("Infinite values: %s", infinite_values)
+    logger.info("Final shape: %s", processed_df.shape)
 
-OUTPUT_PATH = ROOT_DIR / "data" / "processed" / "cleaned_dataset.csv"
+    # 5. Save cleaned dataset
+    OUTPUT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
-OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    processed_df.to_csv(
+        OUTPUT_PATH,
+        index=False
+    )
 
-processed_df.to_csv(OUTPUT_PATH, index=False)
+    logger.info("Cleaned dataset saved: %s", OUTPUT_PATH)
 
-print(f"Cleaned dataset saved: {OUTPUT_PATH}")
+
+if __name__ == "__main__":
+    main()

@@ -1,9 +1,29 @@
 
+import logging
+from pathlib import Path
+
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from evidently import Report
-from evidently.presets import DataDriftPreset
-from pathlib import Path
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+
+DATA_PATH = (
+    ROOT_DIR
+    / "data"
+    / "processed"
+    / "cleaned_dataset.csv"
+)
+
+REPORT_PATH = (
+    ROOT_DIR
+    / "reports"
+    / "data_drift_report.html"
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 def split_data(
     df: pd.DataFrame,
@@ -12,20 +32,36 @@ def split_data(
     random_state: int = 42
 ):
     """
-    Split dataset into training and testing sets.
+    Split the dataset into training and testing sets.
 
-    - 80% training data
-    - 20% testing data
-    - Stratified splitting to preserve class distribution
+    - 80% training data by default
+    - 20% testing data by default
+    - Stratified splitting preserves class distribution
     """
+
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("Input must be a pandas DataFrame.")
 
     if target_column not in df.columns:
         raise ValueError(
             f"Target column '{target_column}' not found."
         )
 
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1.")
+
     X = df.drop(columns=[target_column])
     y = df[target_column]
+
+    if y.isna().any():
+        raise ValueError(
+            f"Target column '{target_column}' contains missing values."
+        )
+
+    if y.nunique() < 2:
+        raise ValueError(
+            "At least two target classes are required for stratified splitting."
+        )
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -35,26 +71,43 @@ def split_data(
         stratify=y
     )
 
-    print("DATA SPLITTING REPORT")
-    print("-" * 40)
-    print(f"Total samples: {len(df)}")
-    print(f"Training samples: {len(X_train)}")
-    print(f"Testing samples: {len(X_test)}")
-    print(f"Training percentage: {len(X_train)/len(df)*100:.2f}%")
-    print(f"Testing percentage: {len(X_test)/len(df)*100:.2f}%")
+    logger.info("DATA SPLITTING REPORT")
+    logger.info("-" * 40)
+    logger.info("Total samples: %s", len(df))
+    logger.info("Training samples: %s", len(X_train))
+    logger.info("Testing samples: %s", len(X_test))
+    logger.info(
+        "Training percentage: %.2f%%",
+        len(X_train) / len(df) * 100
+    )
+    logger.info(
+        "Testing percentage: %.2f%%",
+        len(X_test) / len(df) * 100
+    )
 
-    print("\nTraining class distribution:")
-    print(y_train.value_counts(normalize=True))
+    logger.info("Training class distribution:\n%s",
+                y_train.value_counts(normalize=True))
 
-    print("\nTesting class distribution:")
-    print(y_test.value_counts(normalize=True))
+    logger.info("Testing class distribution:\n%s",
+                y_test.value_counts(normalize=True))
 
     return X_train, X_test, y_train, y_test
+
 
 def validate_data_drift(
     reference_data: pd.DataFrame,
     current_data: pd.DataFrame
 ):
+    """
+    Generate an Evidently data drift report.
+
+    reference_data: Training features
+    current_data: Testing features
+    """
+
+    # Import only when drift validation is actually requested.
+    from evidently import Report
+    from evidently.presets import DataDriftPreset
 
     report = Report([
         DataDriftPreset()
@@ -68,45 +121,46 @@ def validate_data_drift(
     return snapshot
 
 
+def main():
+    """
+    Execute the preprocessing and data drift validation workflow.
+    """
+
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(
+            f"Cleaned dataset not found: {DATA_PATH}"
+        )
+
+    # 1. Load cleaned dataset
+    df = pd.read_csv(DATA_PATH)
+
+    logger.info("Dataset loaded: %s", df.shape)
+
+    # 2. Split dataset
+    X_train, X_test, y_train, y_test = split_data(
+        df,
+        target_column="Label",
+        test_size=0.20,
+        random_state=42
+    )
+
+    # 3. Validate feature distribution using Evidently
+    snapshot = validate_data_drift(
+        reference_data=X_train,
+        current_data=X_test
+    )
+
+    # 4. Save drift report
+    REPORT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    snapshot.save_html(str(REPORT_PATH))
+
+    logger.info("Data drift validation completed.")
+    logger.info("Report saved at: %s", REPORT_PATH)
 
 
-# ==========================================
-# EXECUTION
-# ==========================================
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-
-DATA_PATH = (
-    ROOT_DIR
-    / "data"
-    / "processed"
-    / "cleaned_dataset.csv"
-)
-
-# 1. Load cleaned dataset
-df = pd.read_csv(DATA_PATH)
-
-print(f"Dataset loaded: {df.shape}")
-
-# 2. Split dataset
-X_train, X_test, y_train, y_test = split_data(
-    df,
-    target_column="Label",
-    test_size=0.20,
-    random_state=42
-)
-
-# 3. Validate feature distribution using Evidently
-snapshot = validate_data_drift(
-    reference_data=X_train,
-    current_data=X_test
-)
-
-# 4. Save report
-REPORT_PATH = ROOT_DIR / "reports" / "data_drift_report.html"
-REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-snapshot.save_html(str(REPORT_PATH))
-
-print("\nData drift validation completed.")
-print(f"Report saved at: {REPORT_PATH}")
+if __name__ == "__main__":
+    main()
