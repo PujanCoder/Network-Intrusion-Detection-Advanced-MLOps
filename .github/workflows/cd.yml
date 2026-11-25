@@ -77,9 +77,11 @@ jobs:
       # 6. Pull DVC Data
 
       - name: Pull DVC Data
+        env:
+          DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
         run: |
-          dvc pull
-
+          dvc pull -v
       # 7. Execute ML Pipeline
 
       - name: Execute ML Pipeline
