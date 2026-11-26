@@ -35,7 +35,7 @@ jobs:
           echo "Token set: ${AWS_SESSION_TOKEN:+yes}"
 
       - name: Pull raw dataset                        # ← TARGETED pull
-        run: dvc pull -r origin data/raw/MachineLearningCSV -v
+        run: dvc pull -r origin data/raw/MachineLearningCSV.dvc -v
 
       - name: Verify dataset exists
         run: |
