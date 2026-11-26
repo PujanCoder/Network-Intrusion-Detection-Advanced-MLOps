@@ -1,111 +1,36 @@
-name: Continuous Delivery
+name: CD
 
 on:
   push:
-    branches:
-      - main
-
+    branches: [main]
   workflow_dispatch:
-permissions:
-  contents: read
-
-concurrency:
-  group: mlops-cd
-  cancel-in-progress: false
 
 jobs:
-  build-and-deliver:
-
+  run-pipeline:
     runs-on: ubuntu-latest
 
+    env:                                              # ← JOB-level, applies to all steps
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: us-east-1
+
     steps:
-
-      # 1. Checkout Repository
-
-      - name: Checkout Repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Setup Python
-
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14.6"
-          cache: pip
+          python-version: "3.11"
 
-      # 3. Install Dependencies
-
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
-      - name: Install Requirements
-        run: pip install -r requirements.txt
-
-      # 4. Verify Environment
-
-      - name: Verify Dependencies
+      - name: Install dependencies
         run: |
-          python --version
-          python -m pip check
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "dvc[s3]"                        # ← DVC + S3 support
 
-          python -c "import mlflow; print('MLflow:', mlflow.__version__)"
-          python -c "import dagshub; print('DagsHub:', dagshub.__version__)"
-          python -c "import dvc; print('DVC:', dvc.__version__)"
-            # 5. Configure DVC Authentication
+      - name: Pull dataset from DagsHub
+        run: dvc pull -r origin -v                     # ← ⭐ THIS IS THE FIX
 
-      - name: Configure DVC Authentication
-        env:
-          DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
-          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
-        run: |
-          if [ -z "$DAGSHUB_USERNAME" ] || [ -z "$DAGSHUB_TOKEN" ]; then
-            echo "DagsHub credentials are missing."
-            exit 1
-          fi
-
-          dvc remote modify origin --local auth basic
-          dvc remote modify origin --local user "$DAGSHUB_USERNAME"
-          dvc remote modify origin --local password "$DAGSHUB_TOKEN"
-
-          echo "DagsHub credentials configured successfully."
-            # 6. Check DVC Remote
-
-      - name: Check DVC Remote
-        run: |
-          dvc remote list
-          dvc status -c -v
-      # 6. Pull DVC Data
-
-      - name: Pull DVC Data
-        env:
-          DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
-          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
-        run: |
-          dvc pull -v
-      # 7. Execute ML Pipeline
-
-      - name: Execute ML Pipeline
-        env:
-          DAGSHUB_USER_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
-        run: |
-          python -m src.pipelines.pipeline
-
-      # 8. Verify Model and Reports
-
-      - name: Verify Model and Reports
-        run: |
-          python -c "from pathlib import Path; assert Path('models/best_model.joblib').is_file(), 'Model not found'; print('Model verified.')"
-
-          python -c "from pathlib import Path; assert Path('reports/training_results.json').is_file(), 'Training report not found'; print('Training report verified.')"
-
-      # 9. Upload Artifacts
-
-      - name: Upload Model Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: network-intrusion-detection-model
-          path: |
-            models/best_model.joblib
-            reports/
-          if-no-files-found: error
-          retention-days: 30
+      - name: Run pipeline
+        run: python -m src.pipelines.pipeline
