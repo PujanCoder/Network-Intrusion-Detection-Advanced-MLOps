@@ -9,11 +9,11 @@ jobs:
   run-pipeline:
     runs-on: ubuntu-latest
 
-    env:                                          # ← JOB level, not step
+    env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: us-east-1
-      AWS_SESSION_TOKEN: ""                       # ← explicitly blank (DagsHub rejects it)
+      AWS_SESSION_TOKEN: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -28,14 +28,21 @@ jobs:
           pip install -r requirements.txt
           pip install "dvc[s3]"
 
-      - name: Verify credentials are in scope
+      - name: Debug creds
         run: |
           echo "Access length: ${#AWS_ACCESS_KEY_ID}"
           echo "Secret length: ${#AWS_SECRET_ACCESS_KEY}"
           echo "Token set: ${AWS_SESSION_TOKEN:+yes}"
 
-      - name: Pull DVC data
-        run: dvc pull -r origin -v
+      - name: Pull raw dataset                        # ← TARGETED pull
+        run: dvc pull -r origin data/raw/MachineLearningCSV -v
+
+      - name: Verify dataset exists
+        run: |
+          ls -la data/raw/MachineLearningCSV/ || true
+          test -f data/raw/MachineLearningCSV/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv \
+            && echo "✅ Dataset present" \
+            || (echo "❌ Dataset missing" && exit 1)
 
       - name: Run pipeline
         run: python -m src.pipelines.pipeline
