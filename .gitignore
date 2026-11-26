@@ -238,8 +238,8 @@ __pycache__/
 data/interim/
 
 # Raw CIC-IDS2017 datasets
-data/raw/
-
+data/raw/*
+!data/raw/MachineLearningCSV.dvc
 # Processed datasets
 data/processed/
 
