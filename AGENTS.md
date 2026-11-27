@@ -42,7 +42,8 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
 - `deploy/Dockerfile.serving` binds `$PORT` and trusts proxy headers; Render terminates TLS in
   front of the container. `NDR_API_KEY` is a dashboard secret, never a `VITE_*` variable.
 - `.github/workflows/deploy-render.yml` needs the `RENDER_DEPLOY_HOOK_URL` secret and the
-  `RENDER_HEALTH_URL` variable; without them it prints a notice and skips.
+  `RENDER_HEALTH_URL` variable; without them it prints a notice and skips. It uses
+  `workflow_run`, so GitHub only registers it once the file is on `main`.
 - Render disks require a paid plan. On the free plan SQLite is ephemeral (see the guide).
 
 ## Conventions and gotchas

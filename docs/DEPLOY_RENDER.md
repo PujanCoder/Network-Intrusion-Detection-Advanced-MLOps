@@ -174,6 +174,12 @@ succeeds on `main` or `feature/realtime-ndr-platform`, and on demand. Configure:
 Without `RENDER_DEPLOY_HOOK_URL` the workflow prints a notice and skips; it never
 fails the pipeline and never exposes the hook in logs.
 
+GitHub only registers `workflow_run` and `workflow_dispatch` workflows from the
+**default branch**, so `deploy-render.yml` starts running after this branch is
+merged into `main`. Until then Render still redeploys on push because
+`render.yaml` sets `autoDeploy: true`; the workflow only adds the post-deploy
+health verification.
+
 ## 8. Security notes
 
 - TLS is terminated by Render; the container trusts proxy headers only because it
