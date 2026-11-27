@@ -69,6 +69,7 @@ class Settings:
     api_host: str
     api_port: int
     api_key: str | None = None
+    remote_ingest_max_batch: int = 500
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -97,8 +98,10 @@ class Settings:
             max_ws_clients=_env_int("NDR_MAX_WS_CLIENTS", 200),
             ws_queue_size=_env_int("NDR_WS_QUEUE_SIZE", 500),
             api_host=os.getenv("NDR_API_HOST", "0.0.0.0"),
-            api_port=_env_int("NDR_API_PORT", 8000),
+            # Render (and most PaaS) inject PORT; NDR_API_PORT keeps local runs explicit.
+            api_port=_env_int("PORT", _env_int("NDR_API_PORT", 8000)),
             api_key=os.getenv("NDR_API_KEY") or None,
+            remote_ingest_max_batch=_env_int("NDR_INGEST_MAX_BATCH", 500),
         )
 
 

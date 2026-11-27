@@ -39,6 +39,9 @@ class IngestionService:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        # Serialises the local tailer and remote pushes: the detector engine keeps
+        # sliding windows in memory, so only one writer may touch it at a time.
+        self._process_lock = threading.Lock()
         self.counters = {
             "lines_processed": 0,
             "events_inserted": 0,
@@ -97,7 +100,8 @@ class IngestionService:
         for path, _offset, event in self.reader.read_new():
             batch["processed"] += 1
             try:
-                result = self._handle_event(path, event)
+                with self._process_lock:
+                    result = self._handle_event(path, event)
                 for key in ("inserted", "predictions", "alerts"):
                     batch[key] += int(result[key])
             except Exception as error:
@@ -114,7 +118,14 @@ class IngestionService:
         return batch
 
     def _handle_event(self, path: Path, event: NormalizedEvent) -> dict[str, Any]:
-        result = {"inserted": 0, "predictions": 0, "alerts": 0}
+        result: dict[str, Any] = {
+            "inserted": 0,
+            "predictions": 0,
+            "alerts": 0,
+            "event_id": None,
+            "label": None,
+            "severity": None,
+        }
 
         if event.raw.get("_replay"):
             # Replayed held-out flows are labelled in the UI so nobody mistakes
@@ -135,8 +146,10 @@ class IngestionService:
             event_id, inserted = self.store.insert_event(event.to_row())
             if not inserted:
                 self.counters["duplicates_skipped"] += 1
+                result["duplicate"] = True
                 return result
             result["inserted"] = 1
+            result["event_id"] = event_id
             self.counters["events_inserted"] += 1
             self.last_event_at = time.time()
 
@@ -167,6 +180,9 @@ class IngestionService:
 
             if hits and severity is None:
                 severity = combine_severity(None, hits)
+
+            result["label"] = prediction.label if prediction else None
+            result["severity"] = severity
 
             for hit in hits:
                 if self.store.save_alert(event_id, hit.to_dict()):
@@ -226,6 +242,20 @@ class IngestionService:
         except Exception:  # broadcast must never break ingestion
             logger.warning("Failed to publish event %s", event_id, exc_info=True)
 
+    def process_remote_event(self, event: NormalizedEvent) -> dict[str, Any]:
+        """Score an event pushed by a remote sensor (same path as a tailed line).
+
+        Runs whether or not the local log tailer is enabled, so a hosted API can
+        accept authenticated pushes while the sensor runs on another machine.
+        """
+
+        with self._process_lock:
+            result = self._handle_event(Path(event.source_file), event)
+        with self._lock:
+            self.counters["lines_processed"] += 1
+        self.last_poll_at = time.time()
+        return result
+
     # ------------------------------------------------------------------ #
     # status
     # ------------------------------------------------------------------ #
@@ -256,6 +286,7 @@ class IngestionService:
             "sensor_mode": self.settings.sensor_mode,
             "ingestion_running": self.running,
             "ingest_enabled": self.settings.ingest_enabled,
+            "remote_ingest_enabled": bool(self.settings.api_key),
             "poll_interval_s": self.settings.poll_interval_s,
             "counters": dict(self.counters),
             "last_poll_at": self.last_poll_at,

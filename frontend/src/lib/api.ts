@@ -80,6 +80,7 @@ export interface OverviewSensor {
   mode: string;
   replay_records: number;
   ingestion_running: boolean;
+  remote_ingest_enabled: boolean;
   log_dir_exists: boolean;
   log_file_count: number;
   seconds_since_event: number | null;
@@ -268,6 +269,7 @@ export interface SensorStatus {
   replay_records: number;
   ingestion_running: boolean;
   ingest_enabled: boolean;
+  remote_ingest_enabled: boolean;
   poll_interval_s: number;
   counters: Record<string, number>;
   last_poll_at: number | null;

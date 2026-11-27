@@ -1,0 +1,86 @@
+name: Deploy to Render
+
+# Runs after "Continuous Integration" succeeds on a deployable branch, and on
+# demand. It never blocks CI: when the Render credentials are not configured the
+# job reports a notice and exits green.
+on:
+  workflow_run:
+    workflows: ["Continuous Integration"]
+    types: [completed]
+    branches: [main, "feature/realtime-ndr-platform"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-render-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Trigger Render deploy and verify health
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    steps:
+      - name: Check deployment configuration
+        id: config
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          HEALTH_URL: ${{ vars.RENDER_HEALTH_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::notice::RENDER_DEPLOY_HOOK_URL is not set; skipping Render deployment."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$HEALTH_URL" ]; then
+            echo "::notice::RENDER_HEALTH_URL is not set; skipping verification (deploy still triggered)."
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "verify=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "verify=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger Render deploy hook
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          status=$(curl -sS -o /tmp/deploy.out -w '%{http_code}' -X POST "$DEPLOY_HOOK")
+          echo "deploy hook responded with HTTP $status"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error::Render deploy hook rejected the request (HTTP $status)"
+            exit 1
+          fi
+
+      - name: Wait for the deployed service to become healthy
+        if: steps.config.outputs.verify == 'true'
+        env:
+          HEALTH_URL: ${{ vars.RENDER_HEALTH_URL }}
+        run: |
+          python - "$HEALTH_URL" <<'PY'
+          import json
+          import sys
+          import time
+          import urllib.request
+
+          url = sys.argv[1].rstrip("/") + "/api/health"
+          last = None
+          for attempt in range(60):
+              try:
+                  with urllib.request.urlopen(url, timeout=10) as response:
+                      last = json.load(response)
+                  if last.get("status") == "ok" and last.get("database", {}).get("integrity") == "ok":
+                      print(json.dumps(last, indent=2))
+                      print("deployment healthy at", url)
+                      sys.exit(0)
+                  print("attempt", attempt + 1, "unhealthy:", last.get("status"))
+              except Exception as error:  # noqa: BLE001 - retry on any transient failure
+                  print("attempt", attempt + 1, "error:", error)
+              time.sleep(10)
+          print("last payload:", last)
+          sys.exit("service did not become healthy within 10 minutes")
+          PY

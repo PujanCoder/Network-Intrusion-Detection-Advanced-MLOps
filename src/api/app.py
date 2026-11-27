@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.predictor import ModelService
+from src.api.payloads import overview_payload
 from src.api.routes import router
 from src.realtime.broadcast import ConnectionManager
 from src.realtime.config import Settings, get_settings
@@ -48,36 +49,6 @@ class AppState:
     started_at: float
 
 
-def _overview_payload(state: AppState) -> dict[str, Any]:
-    data = state.store.overview(state.settings.metrics_window_s)
-    data["model"] = {
-        "name": state.model.name,
-        "version": state.model.version,
-        "loaded": state.model.is_loaded,
-        "load_error": state.model.load_error,
-        "threshold": state.model.metadata.get("threshold"),
-        "trained_at": state.model.metadata.get("trained_at"),
-        "training_datasets": state.model.metadata.get("training_datasets"),
-    }
-    sensor = state.service.status() if state.service else {}
-    replay_records = state.store.replay_event_count()
-    data["sensor"] = {
-        "sensor_id": state.settings.sensor_id,
-        "mode": "replay" if replay_records else state.settings.sensor_mode,
-        "replay_records": replay_records,
-        "ingestion_running": sensor.get("ingestion_running", False),
-        "log_dir_exists": sensor.get("reader", {}).get("log_dir_exists", False),
-        "log_file_count": sensor.get("reader", {}).get("log_file_count", 0),
-        "seconds_since_event": sensor.get("seconds_since_event"),
-        "last_error": sensor.get("last_error"),
-    }
-    data["websocket"] = state.hub.status()
-    data["no_new_events"] = (
-        data["seconds_since_last_event"] is None or data["seconds_since_last_event"] > 15
-    )
-    return data
-
-
 async def _metrics_ticker(app: FastAPI) -> None:
     """Broadcast DB-derived metrics once per second to connected dashboards.
 
@@ -91,7 +62,7 @@ async def _metrics_ticker(app: FastAPI) -> None:
         try:
             if state.hub.client_count == 0:
                 continue
-            payload = await asyncio.to_thread(_overview_payload, state)
+            payload = await asyncio.to_thread(overview_payload, state)
             await state.hub.broadcast({"type": "metrics", "overview": payload, "ts": time.time()})
         except asyncio.CancelledError:
             raise
@@ -112,9 +83,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hub = ConnectionManager(settings.max_ws_clients, settings.ws_queue_size)
         hub.bind_loop(asyncio.get_running_loop())
 
-        service = None
+        # The service is always constructed so remote pushes can be scored even when
+        # local log tailing is disabled (the hosted deployment case).
+        service = IngestionService(settings, store, model, publisher=hub.publish_threadsafe)
         if settings.ingest_enabled:
-            service = IngestionService(settings, store, model, publisher=hub.publish_threadsafe)
             service.start()
 
         app.state.ndr = AppState(

@@ -11,8 +11,12 @@ Repository notes for automated agents and contributors.
 ## Commands
 
 ```bash
-# tests (85)
+# tests (95)
 PYTHONPATH=$PWD python -m pytest tests/ -q
+
+# remote-ingestion smoke test against a running API
+NDR_API_KEY=dev-key PYTHONPATH=$PWD python scripts/zeek_forward.py \
+    --url http://127.0.0.1:8000 --log /tmp/conn.log --insecure
 
 # backend + built dashboard
 cd frontend && npm run build && cd ..
@@ -27,6 +31,20 @@ NDR_SENSOR_MODE=replay PYTHONPATH=$PWD python scripts/replay_zeek_holdout.py --r
 # retrain the live model (writes models/zeek + reports/zeek_model)
 PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
 ```
+
+## Deployment
+
+- `render.yaml` is the single hosted-service definition (Docker, health check
+  `/api/health`, disk at `/var/data`). `docs/DEPLOY_RENDER.md` is the operator guide.
+- The hosted service sets `NDR_INGEST_ENABLED=false` (no Zeek in the container) and relies on
+  `POST /api/ingest/zeek`, which **fails closed (503) unless `NDR_API_KEY` is set**. Sensors push
+  with `scripts/zeek_forward.py`, which keeps a byte offset so restarts do not re-send.
+- `deploy/Dockerfile.serving` binds `$PORT` and trusts proxy headers; Render terminates TLS in
+  front of the container. `NDR_API_KEY` is a dashboard secret, never a `VITE_*` variable.
+- `.github/workflows/deploy-render.yml` needs the `RENDER_DEPLOY_HOOK_URL` secret and the
+  `RENDER_HEALTH_URL` variable; without them it prints a notice and skips. It uses
+  `workflow_run`, so GitHub only registers it once the file is on `main`.
+- Render disks require a paid plan. On the free plan SQLite is ephemeral (see the guide).
 
 ## Conventions and gotchas
 
