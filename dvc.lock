@@ -1,64 +1,5 @@
 schema: '2.0'
 stages:
-  model_training:
-    cmd: python -m src.models.train_model
-    deps:
-    - path: data/processed/transformed/X_test_transformed.csv
-      hash: md5
-      md5: 479674413ec441886e5e86ecfa3a1ba4
-      size: 51184814
-    - path: data/processed/transformed/X_train_transformed.csv
-      hash: md5
-      md5: 56d9e84b6fe0957b1e01fda3d4c97a5e
-      size: 204712863
-    - path: data/processed/transformed/y_test.csv
-      hash: md5
-      md5: f099a817723a2c0e6e536a79b45ed898
-      size: 305783
-    - path: data/processed/transformed/y_train.csv
-      hash: md5
-      md5: 14cba1b3b7681c57b368b519ab486201
-      size: 1223095
-    - path: src/models/train_model.py
-      hash: md5
-      md5: 63bc279e0ec1eaa65152d7bb0990c712
-      size: 9319
-    params:
-      params.yaml:
-        data:
-          X_train: data/processed/transformed/X_train_transformed.csv
-          X_test: data/processed/transformed/X_test_transformed.csv
-          y_train: data/processed/transformed/y_train.csv
-          y_test: data/processed/transformed/y_test.csv
-        mlflow:
-          experiment_name: Network-Intrusion-Detection
-          registered_model_name: Network-Intrusion-Detection-Model
-        model:
-          random_state: 42
-          test_size: 0.2
-          algorithms:
-            logistic_regression:
-              max_iter: 2000
-              class_weight: balanced
-            decision_tree:
-              max_depth: 20
-              random_state: 42
-              class_weight: balanced
-            random_forest:
-              n_estimators: 200
-              max_depth: 20
-              random_state: 42
-              n_jobs: -1
-              class_weight: balanced
-    outs:
-    - path: models/best_model.joblib
-      hash: md5
-      md5: 126349e67119e25027b0f65da949bebb
-      size: 4165689
-    - path: reports/model_metrics.json
-      hash: md5
-      md5: 973d8e12544ef6459a185f2cbda1edfc
-      size: 2191
   ml_pipeline:
     cmd: python -m src.pipelines.pipeline
     deps:
@@ -69,37 +10,41 @@ stages:
       size: 77123859
     - path: src/features/data_cleaning.py
       hash: md5
-      md5: 11b8dc8bc7c0d24834987647722f5c40
-      size: 6115
+      md5: 6c5c0171ee40d15532e439f8ab69e156
+      size: 5872
     - path: src/features/data_preprocessing.py
       hash: md5
-      md5: 7ca447cf4f9a712600abfaa8500f46fe
-      size: 4803
+      md5: 01a6f87200463df455dc847668f4c454
+      size: 4616
     - path: src/features/feature_transformation.py
       hash: md5
-      md5: b6a2e189072b932004e26e003296dad0
-      size: 3609
+      md5: 68c22cb6e9994c915967f53c35d5a403
+      size: 3474
     - path: src/features/transformation_validation.py
       hash: md5
-      md5: 1fe6e3fce28592819f58f42ca5be442c
-      size: 1836
+      md5: 8cd445c7a8b3f706a9d2b6833e9e5fc4
+      size: 2200
     - path: src/models/evaluate_model.py
       hash: md5
-      md5: 36f1d08a26d8d1f5ad70dc09787cb182
-      size: 11127
+      md5: d1d3e816ef46b3defc88f83de8801c49
+      size: 10886
+    - path: src/models/tracking.py
+      hash: md5
+      md5: 3ea7953cacdd394155a97e7d30e954b6
+      size: 1531
     - path: src/models/train_model.py
       hash: md5
-      md5: 8d3ac09504b9297883cd3e43c6957c7f
-      size: 10983
+      md5: b7dc65eb5b12ebd71770ed71dc521b62
+      size: 10457
     - path: src/pipelines/pipeline.py
       hash: md5
-      md5: 07bb469f67f557de16822850182354c1
-      size: 9970
+      md5: 2e92f36f2c630a97b41ec0123f81a7f7
+      size: 9575
     params:
       params.yaml:
         data:
-          X_train: data/processed/transformed/X_train_transformed.csv
-          X_test: data/processed/transformed/X_test_transformed.csv
+          X_train: data/processed/transformed/X_train_selected.csv
+          X_test: data/processed/transformed/X_test_selected.csv
           y_train: data/processed/transformed/y_train.csv
           y_test: data/processed/transformed/y_test.csv
         mlflow:
@@ -127,40 +72,56 @@ stages:
     outs:
     - path: data/processed/cleaned_dataset.csv
       hash: md5
-      md5: 1f2eb4cae58165a269cad382664f5cce
-      size: 81779491
+      md5: 5afed0001182974e4267a0d99a96cc8f
+      size: 81556378
     - path: data/processed/transformed
       hash: md5
-      md5: 2a131ef7ac01423b1cb9ecc41aabff3f.dir
-      size: 539287114
+      md5: e37e8ff3972b72d702b2b080641332bf.dir
+      size: 538920748
       nfiles: 7
     - path: models/best_model.joblib
       hash: md5
-      md5: 5a60a301926b7b183e028210a9509211
-      size: 2698297
+      md5: 4b58332d761da6378f6a94d8f6af6d87
+      size: 2674969
     - path: models/preprocessor.joblib
       hash: md5
-      md5: c6e28c5e54c7838796a251b841e246df
-      size: 9332
+      md5: 1d764e434076fad22c162a6c2e556472
+      size: 10988
+    - path: reports/data_drift_report.html
+      hash: md5
+      md5: ee145c034ff6cb7de328649dac3aeba0
+      size: 8059092
+    - path: reports/model_evaluation/evaluation_results.json
+      hash: md5
+      md5: b1f4d4d02bc37c9740a55b8e8667e75b
+      size: 1531
+    - path: reports/model_evaluation/model_comparison.csv
+      hash: md5
+      md5: 59ded99f1ba2d13a5bd4e38779bca02d
+      size: 1018
+    - path: reports/outlier_report.csv
+      hash: md5
+      md5: 8481de6abe8ac14078fa47fbfdb521f9
+      size: 2686
     - path: reports/training_results.json
       hash: md5
-      md5: a6d400f9365f95f63e3990d288f19e9c
-      size: 1254
+      md5: 4a98d8bc9a25c2c3baf64377d76cdb75
+      size: 1333
   validate_preprocessor:
     cmd: python -m src.serving.validate_artifacts
     deps:
     - path: models/best_model.joblib
       hash: md5
-      md5: 5a60a301926b7b183e028210a9509211
-      size: 2698297
+      md5: 4b58332d761da6378f6a94d8f6af6d87
+      size: 2674969
     - path: models/preprocessor.joblib
       hash: md5
-      md5: 66d5ee0cd4a3afc6937e2ddbd99ef008
-      size: 10795
+      md5: 1d764e434076fad22c162a6c2e556472
+      size: 10988
     - path: src/serving/validate_artifacts.py
       hash: md5
-      md5: 7c6fd94214df2cf28e677ab8840ec72b
-      size: 1559
+      md5: 73a6b35d890ad3bd4575787cdc3df4e5
+      size: 2001
     params:
       params.yaml:
         model.path: models/best_model.joblib
@@ -168,5 +129,5 @@ stages:
     outs:
     - path: reports/serving_validation.json
       hash: md5
-      md5: 6346dc4757e5da24958784583113bec1
-      size: 158
+      md5: 7bd8d89fb6212585221bc7b59dd455bd
+      size: 219
