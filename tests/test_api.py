@@ -165,3 +165,32 @@ def test_websocket_hello_and_event_broadcast(client) -> None:
                 break
         else:  # pragma: no cover - defensive
             pytest.fail("event broadcast never arrived")
+
+
+def test_api_key_enforced_when_configured(settings: Settings) -> None:
+    from dataclasses import replace
+
+    app = create_app(replace(settings, api_key="s3cret"))
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/events").status_code == 401
+        assert client.get("/api/events", headers={"X-API-Key": "s3cret"}).status_code == 200
+        assert (
+            client.get("/api/events", headers={"Authorization": "Bearer s3cret"}).status_code
+            == 200
+        )
+
+
+def test_websocket_requires_api_key(settings: Settings) -> None:
+    from dataclasses import replace
+
+    from starlette.websockets import WebSocketDisconnect
+
+    app = create_app(replace(settings, api_key="s3cret"))
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/api/ws") as ws:
+                ws.receive_json()
+
+        with client.websocket_connect("/api/ws?api_key=s3cret") as ws:
+            assert ws.receive_json()["type"] == "hello"

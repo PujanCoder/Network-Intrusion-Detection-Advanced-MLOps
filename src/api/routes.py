@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hmac
 import io
 import time
 from datetime import datetime, timezone
@@ -299,6 +300,16 @@ def sensors(request: Request) -> dict[str, Any]:
 @router.websocket("/ws")
 async def live_stream(websocket: WebSocket) -> None:
     state = websocket.app.state.ndr
+    key = state.settings.api_key
+    if key:
+        provided = (
+            websocket.query_params.get("api_key")
+            or websocket.headers.get("x-api-key")
+            or ""
+        )
+        if not hmac.compare_digest(provided, key):
+            await websocket.close(code=1008)
+            return
     manager = state.hub
     registered = manager.register()
     if registered is None:

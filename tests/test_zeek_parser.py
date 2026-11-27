@@ -6,7 +6,7 @@ import pytest
 
 from src.realtime.zeek_parser import ZeekLogParser, log_type_for_path
 
-FIXTURES = Path(__file__).parent / "fixtures" / "zeek"
+FIXTURES = Path(__file__).parent / "fixtures" / "zeek_realtime"
 
 
 @pytest.fixture()

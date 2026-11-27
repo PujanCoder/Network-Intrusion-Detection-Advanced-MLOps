@@ -68,6 +68,7 @@ class Settings:
     ws_queue_size: int
     api_host: str
     api_port: int
+    api_key: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -97,6 +98,7 @@ class Settings:
             ws_queue_size=_env_int("NDR_WS_QUEUE_SIZE", 500),
             api_host=os.getenv("NDR_API_HOST", "0.0.0.0"),
             api_port=_env_int("NDR_API_PORT", 8000),
+            api_key=os.getenv("NDR_API_KEY") or None,
         )
 
 

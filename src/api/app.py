@@ -12,13 +12,14 @@ Run locally::
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -154,6 +155,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET"],
         allow_headers=["*"],
     )
+    @app.middleware("http")
+    async def enforce_api_key(request: Request, call_next):
+        state = getattr(request.app.state, "ndr", None)
+        key = state.settings.api_key if state else None
+        path = request.url.path
+        if key and path.startswith("/api") and path != "/api/health":
+            provided = request.headers.get("x-api-key", "")
+            auth = request.headers.get("authorization", "")
+            if not provided and auth.lower().startswith("bearer "):
+                provided = auth[7:].strip()
+            if not hmac.compare_digest(provided, key):
+                return JSONResponse({"detail": "invalid or missing API key"}, status_code=401)
+        return await call_next(request)
+
     app.include_router(router, prefix="/api")
 
     dist = settings.frontend_dist

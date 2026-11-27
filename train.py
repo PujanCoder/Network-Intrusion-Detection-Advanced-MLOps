@@ -1,12 +1,11 @@
-import dagshub
-import mlflow
+"""Batch training entry point.
 
+Kept so ``python train.py`` keeps working. The pipeline itself lives in
+``src/pipelines/pipeline.py`` and is orchestrated by DVC (``dvc repro``), which
+is the supported way to train: it records the exact data and parameter hashes.
+"""
 
-dagshub.init(
-    repo_owner="pujanpandey012",
-    repo_name="Network-Intrusion-Detection-Advanced-MLOps",
-    mlflow=True
-)
+from src.pipelines.pipeline import run_pipeline
 
-mlflow.set_experiment("Network-Intrusion-Detection")
-
+if __name__ == "__main__":
+    run_pipeline()
