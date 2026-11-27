@@ -15,7 +15,7 @@ export function StreamPage() {
   const [paused, setPaused] = useState(false);
   const [onlyMalicious, setOnlyMalicious] = useState(false);
   const [query, setQuery] = useState("");
-  const initial = usePolled<{ items: NetworkEvent[] }>(() => getJson("/api/events?limit=150"), 60000);
+  const initial = usePolled<{ items: NetworkEvent[] }>(() => getJson<{ items: NetworkEvent[] }>("/api/events?limit=150"), 60000);
 
   const merged = useMergedEvents(live.events, initial.data?.items ?? [], 500);
 

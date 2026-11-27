@@ -15,7 +15,7 @@ export function OverviewPage() {
   const live = useLive();
   const [selected, setSelected] = useState<NetworkEvent | null>(null);
   const analytics = usePolled<Analytics>(() => getJson<Analytics>("/api/analytics?window=900"), 5000);
-  const recent = usePolled<{ items: NetworkEvent[] }>(() => getJson("/api/events?limit=12"), 8000);
+  const recent = usePolled<{ items: NetworkEvent[] }>(() => getJson<{ items: NetworkEvent[] }>("/api/events?limit=12"), 8000);
 
   const overview = live.overview;
   const merged = useMergedEvents(live.events, recent.data?.items ?? [], 12);

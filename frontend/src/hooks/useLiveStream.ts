@@ -31,7 +31,12 @@ const initialState: LiveState = {
   sessionAttacks: 0,
 };
 
-export function useLiveStream(maxEvents = 400) {
+export type LiveStream = LiveState & {
+  setPaused: (paused: boolean) => void;
+  clearEvents: () => void;
+};
+
+export function useLiveStream(maxEvents = 400): LiveStream {
   const [state, setState] = useState<LiveState>(initialState);
   const pausedRef = useRef(false);
   const bufferRef = useRef<NetworkEvent[]>([]);
