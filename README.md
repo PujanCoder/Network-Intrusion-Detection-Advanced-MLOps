@@ -23,7 +23,7 @@ CICIDS2017 intrusion-detection ML pipeline, which is still in the repository and
 | 10 rule-based behavioural detectors | Implemented, tested |
 | FastAPI REST + WebSocket API | Implemented, tested, executed |
 | React dashboard, 6 pages, live updates | Built, executed in a browser |
-| 75 automated tests | Passing |
+| 85 automated tests | Passing |
 | Batch CICIDS2017 pipeline (MLflow/DagsHub/DVC) | Preserved |
 | Live Zeek capture on a real interface | **Not verified here** (no Zeek in this container) |
 
@@ -34,7 +34,7 @@ Full detail: [`docs/PROJECT_ARCHITECTURE.md`](docs/PROJECT_ARCHITECTURE.md).
 ## Quick start
 
 ```bash
-python -m pip install -r requirements.txt      # note: requirements.txt is UTF-16 encoded
+python -m pip install -r requirements.txt
 
 cd frontend && npm ci && npm run build && cd ..
 
@@ -43,6 +43,14 @@ PYTHONPATH=$PWD python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 
 Open <http://localhost:8000>. The dashboard is served from `frontend/dist`; the API is under
 `/api`.
+
+Or run both containers (Zeek sensor + API/dashboard) with Compose:
+
+```bash
+docker compose -f deploy/docker-compose.yml up --build
+```
+
+The sensor container needs `NET_RAW`/`NET_ADMIN` and a real interface (`IFACE=eth0`).
 
 Frontend development with hot reload:
 
@@ -72,7 +80,7 @@ instead of inventing activity.
 ### Tests
 
 ```bash
-PYTHONPATH=$PWD python -m pytest tests/ -q      # 75 passed
+PYTHONPATH=$PWD python -m pytest tests/ -q      # 85 passed
 cd frontend && npx tsc --noEmit && npm run build
 ```
 
@@ -116,7 +124,7 @@ Zeek conn.log ──► reader.py ──► zeek_parser.py ──► features.py
 | UNSW-NB15 official test | precision 0.941 · recall 0.937 · F1 0.939 · FPR 0.125 |
 | NSL-KDD official test | precision 0.943 · recall 0.492 · F1 0.647 · FPR 0.039 |
 | Zero-day probe (trained without NSL-KDD) | recall 0.00 at 0.00 FPR — does not transfer |
-| Inference latency | p50 3.1 ms, p95 10.0 ms (measured) |
+| Inference latency | p50 2.23 ms, p95 2.92 ms, 432 flows/s (2,000 flows, measured) |
 
 Retrain:
 
@@ -130,6 +138,41 @@ false positives/negatives, and `model_card.md`.
 The original batch model (`models/best_model.joblib`, Logistic Regression / Decision Tree /
 Random Forest on CICIDS2017) is untouched and is reported separately by `GET /api/model` under
 `batch_model`.
+
+---
+
+## Batch pipeline (DVC + MLflow)
+
+The CICIDS2017 pipeline is still orchestrated by DVC and tracked in MLflow:
+
+```bash
+python -m dvc repro            # clean -> preprocess -> train -> evaluate -> validate
+python -m dvc status
+```
+
+Stages (`dvc.yaml`): `ml_pipeline` (the whole batch run) and `validate_preprocessor`
+(read-only check that the saved preprocessor and batch model agree). The two stages never
+write the same artefact, so `models/preprocessor.joblib` has a single owner.
+
+Artefacts (`data/processed/`, `models/best_model.joblib`, `models/preprocessor.joblib`) are
+DVC-tracked and gitignored. The remote is the DagsHub DVC endpoint:
+
+```bash
+# one-time, per machine; credentials go to .dvc/config.local (never committed)
+python -m dvc remote modify origin --local auth basic
+python -m dvc remote modify origin --local user <dagshub-user>
+python -m dvc remote modify origin --local password <dagshub-token>
+
+python -m dvc pull      # fetch artefacts on a fresh clone / CI runner
+python -m dvc push      # publish artefacts you just reproduced
+```
+
+MLflow tracking uses `DAGSHUB_USER_TOKEN` when it is set and otherwise falls back to a local
+`sqlite:///mlflow.db` store, so the pipeline runs offline and on CI without credentials.
+
+The `tests/test_feature_contract.py` contract test needs the two model artefacts. It is
+skipped when they are absent; set `NDR_REQUIRE_ARTIFACTS=1` to make a missing artefact a hard
+failure (CI sets it after a successful `dvc pull`).
 
 ---
 
@@ -177,7 +220,7 @@ frontend/           React + TypeScript + Vite + Recharts dashboard
 models/             zeek/ live model, best_model.joblib batch model
 reports/            evaluation reports, threshold sweep, model card
 scripts/            run_api.sh, zeek_live.sh, replay_zeek_holdout.py
-tests/              75 tests (parser, features, store, reader, detectors, API)
+tests/              85 tests (parser, features, store, reader, detectors, API)
 docs/               PROJECT_ARCHITECTURE.md
 ```
 
@@ -187,11 +230,17 @@ All runtime settings are environment variables (see `src/realtime/config.py`):
 `NDR_ZEEK_LOG_DIR`, `NDR_DB_PATH`, `NDR_MODEL_PATH`, `NDR_SENSOR_ID`, `NDR_SENSOR_MODE`,
 `NDR_POLL_INTERVAL`, `NDR_INGEST_ENABLED`, `NDR_CORS_ORIGINS`, `NDR_RETENTION_DAYS`,
 `NDR_FRONTEND_DIST`, `NDR_METRICS_WINDOW`, `NDR_WS_METRICS_INTERVAL`, `NDR_MAX_WS_CLIENTS`,
-`NDR_WS_QUEUE_SIZE`, `NDR_API_HOST`, `NDR_API_PORT`.
+`NDR_WS_QUEUE_SIZE`, `NDR_API_HOST`, `NDR_API_PORT`, `NDR_API_KEY`.
+
+`NDR_API_KEY` is optional and off by default. When set, every `/api/*` call except
+`/api/health` must send it as `X-API-Key` (or `Authorization: Bearer`), and the WebSocket
+must pass `?api_key=...`. The dashboard reads the same value from `VITE_API_KEY` at build
+time.
 
 ## Known limitations
 
 No live sensor validation in this environment; weak cross-dataset transfer; metadata-only
-detection (no payload analysis); SQLite single-node storage; no authentication; heuristic
-detector thresholds that need per-site tuning. The full list, with context, is in
+detection (no payload analysis); SQLite single-node storage; authentication is opt-in
+(`NDR_API_KEY`) rather than enforced by default; heuristic detector thresholds that need
+per-site tuning. The full list, with context, is in
 [`docs/PROJECT_ARCHITECTURE.md`](docs/PROJECT_ARCHITECTURE.md#12-current-limitations).

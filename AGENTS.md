@@ -5,14 +5,13 @@ Repository notes for automated agents and contributors.
 ## Environment
 
 - Python 3.13 at `/usr/local/bin/python`; run everything from the repository root.
-- `requirements.txt` is UTF-16 encoded (CRLF). Edit it with `read_bytes().decode("utf-16")`
-  and write it back with `.encode("utf-16")`, otherwise `read_text()` fails on the BOM.
+- `requirements.txt` is UTF-8 (the old UTF-16 note was wrong; the BOM was removed).
 - Frontend: Node 22+ / npm, Vite, React 19, TypeScript, Recharts.
 
 ## Commands
 
 ```bash
-# tests (75)
+# tests (85)
 PYTHONPATH=$PWD python -m pytest tests/ -q
 
 # backend + built dashboard
@@ -42,6 +41,12 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
   `models/best_model.joblib` is a DVC/pipeline artefact and stays ignored.
 - `frontend/dist` and `frontend/node_modules` are gitignored; `scripts/run_api.sh` builds the
   bundle when it is missing.
+- `.gitignore` has a Python-oriented `lib/` rule. `frontend/src/lib/` (the dashboard's shared
+  API/types/format modules) is force-tracked at the bottom of `.gitignore`; if those modules
+  ever go missing from a checkout, check that rule first.
+- Batch artefacts are DVC-tracked (DagsHub HTTP remote). `tests/test_feature_contract.py`
+  skips when `models/best_model.joblib` / `models/preprocessor.joblib` are absent; set
+  `NDR_REQUIRE_ARTIFACTS=1` to turn that into a failure. Run `dvc pull` first.
 - Detection results are decision support: in-distribution F1 ≈ 0.97, but cross-dataset
   transfer is weak and the zero-day probe scores 0 recall. Do not describe the model as
   production-ready.

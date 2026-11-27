@@ -197,11 +197,11 @@ Network-Intrusion-Detection-Advanced-MLOps/
 │   ├── run_api.sh                 uvicorn + built dashboard
 │   ├── zeek_live.sh               Zeek on an interface → data/zeek_logs/conn.log
 │   └── replay_zeek_holdout.py     replay held-out flows into conn.log
-├── tests/                         75 tests (unit + API + WebSocket)
+├── tests/                         85 tests (unit + API + WebSocket)
 ├── docs/PROJECT_ARCHITECTURE.md   this file
 ├── dvc.yaml / dvc.lock            batch pipeline stages
 ├── params.yaml                    batch hyper-parameters
-├── requirements.txt               Python dependencies (UTF-16 encoded)
+├── requirements.txt               Python dependencies (UTF-8)
 └── .github/workflows/             ci.yml, cd.yml
 ```
 
@@ -501,7 +501,7 @@ python -m src.realtime.training                ─► models/zeek/*, reports/zee
                                                   (multi-dataset live classifier)
 
 GitHub Actions
-  ci.yml : install → compile → pytest (75 tests) → frontend typecheck/build
+  ci.yml : install → compile → pytest (85 tests) → frontend typecheck/build → docker build
   cd.yml : dvc pull → full batch pipeline
 ```
 

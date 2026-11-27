@@ -10,7 +10,7 @@ PORT="${NDR_PORT:-8000}"
 
 if [ ! -f frontend/dist/index.html ]; then
   echo "frontend/dist missing - building dashboard"
-  (cd frontend && npm install --silent && npm run build)
+  (cd frontend && if [ -f package-lock.json ]; then npm ci --silent; else npm install --silent; fi && npm run build)
 fi
 
 exec uvicorn src.api.app:app --host "$HOST" --port "$PORT" "$@"
