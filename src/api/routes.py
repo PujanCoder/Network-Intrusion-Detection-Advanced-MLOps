@@ -10,8 +10,12 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from src.api.payloads import overview_payload
+from src.realtime.zeek_parser import ZeekLogParser
 
 router = APIRouter()
 
@@ -61,39 +65,13 @@ def health(request: Request) -> dict[str, Any]:
         "model_loaded": state.model.is_loaded,
         "database": state.store.db_status(),
         "database_path": str(state.settings.db_path),
+        "remote_ingest_enabled": bool(state.settings.api_key),
     }
 
 
 @router.get("/overview")
 def overview(request: Request) -> dict[str, Any]:
-    state = _state(request)
-    data = state.store.overview(state.settings.metrics_window_s)
-    data["model"] = {
-        "name": state.model.name,
-        "version": state.model.version,
-        "loaded": state.model.is_loaded,
-        "load_error": state.model.load_error,
-        "threshold": state.model.metadata.get("threshold"),
-        "trained_at": state.model.metadata.get("trained_at"),
-        "training_datasets": state.model.metadata.get("training_datasets"),
-    }
-    sensor = state.service.status() if state.service else {}
-    replay_records = state.store.replay_event_count()
-    data["sensor"] = {
-        "sensor_id": state.settings.sensor_id,
-        "mode": "replay" if replay_records else state.settings.sensor_mode,
-        "replay_records": replay_records,
-        "ingestion_running": sensor.get("ingestion_running", False),
-        "log_dir_exists": sensor.get("reader", {}).get("log_dir_exists", False),
-        "log_file_count": sensor.get("reader", {}).get("log_file_count", 0),
-        "seconds_since_event": sensor.get("seconds_since_event"),
-        "last_error": sensor.get("last_error"),
-    }
-    data["websocket"] = state.hub.status()
-    data["no_new_events"] = (
-        data["seconds_since_last_event"] is None or data["seconds_since_last_event"] > 15
-    )
-    return data
+    return overview_payload(_state(request))
 
 
 @router.get("/events")
@@ -292,6 +270,107 @@ def sensors(request: Request) -> dict[str, Any]:
         "dead_letters": state.store.dead_letter_count(),
         "server_time": time.time(),
     }
+
+
+
+# --------------------------------------------------------------------------- #
+# Remote sensor ingestion
+# --------------------------------------------------------------------------- #
+# Zeek log types a sensor is allowed to push. The set mirrors the file types the
+# local tailer understands, so remote and local events take the same code path.
+REMOTE_LOG_TYPES = {
+    "conn", "dns", "http", "ssl", "files", "notice", "x509", "dhcp",
+    "smtp", "ftp", "ssh", "dce_rpc", "ntlm", "smb", "sip", "tunnel", "weird",
+}
+
+
+class ZeekIngestRequest(BaseModel):
+    """Batch of Zeek records pushed by a sensor running outside this host."""
+
+    sensor_id: str | None = Field(default=None, max_length=64)
+    log_type: str = Field(default="conn", max_length=16)
+    # Hard transport cap; the configurable NDR_INGEST_MAX_BATCH limit is enforced
+    # below so operators can tighten it per deployment.
+    records: list[dict[str, Any]] = Field(..., min_length=1, max_length=5000)
+
+
+def _require_remote_ingest(state, api_key: str | None) -> None:
+    """Fail closed: pushes are only accepted when a key is configured."""
+
+    expected = state.settings.api_key
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="remote ingestion is disabled: set NDR_API_KEY to enable authenticated pushes",
+        )
+    if not hmac.compare_digest(api_key or "", expected):
+        raise HTTPException(status_code=401, detail="invalid api key")
+
+
+@router.post("/ingest/zeek")
+def ingest_zeek(
+    request: Request,
+    payload: ZeekIngestRequest,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict[str, Any]:
+    """Score Zeek records pushed over HTTPS by a remote sensor.
+
+    Records are parsed and normalised with the same code as tailed log lines, so
+    predictions, behavioural alerts, duplicate suppression and WebSocket
+    broadcasts behave identically. Nothing is stored when the record is invalid.
+    """
+
+    state = _state(request)
+    _require_remote_ingest(state, x_api_key)
+
+    max_batch = state.settings.remote_ingest_max_batch
+    if len(payload.records) > max_batch:
+        raise HTTPException(
+            status_code=413,
+            detail=f"batch too large: {len(payload.records)} records (limit {max_batch})",
+        )
+    if payload.log_type not in REMOTE_LOG_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported log_type '{payload.log_type}'",
+        )
+
+    sensor = payload.sensor_id or state.settings.sensor_id
+    source_file = f"remote:{sensor}:{payload.log_type}.log"
+    parser = ZeekLogParser()
+
+    totals = {"inserted": 0, "duplicates": 0, "predictions": 0, "alerts": 0, "rejected": 0}
+    results: list[dict[str, Any]] = []
+
+    for index, record in enumerate(payload.records):
+        event = parser.normalize(record, payload.log_type, sensor, source_file, source_offset=index)
+        if event is None:
+            totals["rejected"] += 1
+            results.append({"index": index, "status": "rejected", "reason": "missing or invalid ts"})
+            continue
+
+        outcome = state.service.process_remote_event(event)
+        if outcome.get("inserted"):
+            totals["inserted"] += 1
+            totals["predictions"] += int(outcome.get("predictions") or 0)
+            totals["alerts"] += int(outcome.get("alerts") or 0)
+            status = "inserted"
+        else:
+            totals["duplicates"] += 1
+            status = "duplicate"
+
+        results.append(
+            {
+                "index": index,
+                "uid": event.event_uid,
+                "status": status,
+                "event_id": outcome.get("event_id"),
+                "prediction": outcome.get("label"),
+                "severity": outcome.get("severity"),
+            }
+        )
+
+    return {"sensor_id": sensor, "log_type": payload.log_type, **totals, "results": results}
 
 
 # --------------------------------------------------------------------------- #

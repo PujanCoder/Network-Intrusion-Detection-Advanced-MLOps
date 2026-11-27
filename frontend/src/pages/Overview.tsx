@@ -33,6 +33,14 @@ export function OverviewPage() {
   const idle = overview?.no_new_events ?? true;
   const zeekCapturing =
     (live.overview?.sensor?.log_dir_exists ?? false) && (live.overview?.sensor?.log_file_count ?? 0) > 0;
+  const remoteIngest = overview?.sensor?.remote_ingest_enabled ?? false;
+  const ingestionLabel = overview?.sensor?.ingestion_running
+    ? "ingestion running"
+    : remoteIngest
+      ? "remote ingestion ready"
+      : "ingestion stopped";
+  const ingestionOk = (overview?.sensor?.ingestion_running ?? false) || remoteIngest;
+  const captureLabel = zeekCapturing ? "capture active" : remoteIngest ? "remote sensor" : "no log files";
 
   return (
     <>
@@ -52,7 +60,7 @@ export function OverviewPage() {
           <span>
             The sensor is {live.connected ? "connected" : "reconnecting"} and ingestion is
             {" "}
-            {overview?.sensor?.ingestion_running ? "running" : "stopped"}. Last event{" "}
+            {overview?.sensor?.ingestion_running ? "running" : remoteIngest ? "waiting for sensor pushes" : "stopped"}. Last event{" "}
             {relativeSeconds(overview?.seconds_since_last_event)}. Nothing is fabricated while the
             network is quiet.
           </span>
@@ -101,18 +109,17 @@ export function OverviewPage() {
       <div className="grid cols-3">
         <Panel title="Sensor" hint="Zeek capture">
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-            <Pill text={zeekCapturing ? "capture active" : "no log files"} tone={zeekCapturing ? "ok" : "warn"} />
+            <Pill text={captureLabel} tone={zeekCapturing || remoteIngest ? "ok" : "warn"} />
             <Pill text={overview?.sensor?.mode ?? "unknown"} tone="info" />
-            <Pill
-              text={overview?.sensor?.ingestion_running ? "ingestion running" : "ingestion stopped"}
-              tone={overview?.sensor?.ingestion_running ? "ok" : "bad"}
-            />
+            <Pill text={ingestionLabel} tone={ingestionOk ? "ok" : "bad"} />
           </div>
           <dl className="kv">
             <dt>Sensor ID</dt>
             <dd className="mono">{overview?.sensor?.sensor_id ?? "—"}</dd>
             <dt>Log directory</dt>
-            <dd className="mono">{live.overview?.sensor?.log_dir_exists ? "present" : "missing"}</dd>
+            <dd className="mono">
+              {live.overview?.sensor?.log_dir_exists ? "present" : remoteIngest ? "remote push" : "missing"}
+            </dd>
             <dt>Log files</dt>
             <dd className="mono">{formatNumber(overview?.sensor?.log_file_count ?? 0)}</dd>
             <dt>Last event</dt>
