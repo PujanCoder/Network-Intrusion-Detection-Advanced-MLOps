@@ -272,3 +272,14 @@ frontend/dist/
 !tests/fixtures/**
 !tests/ingestion/
 !tests/ingestion/**
+# `lib/` above targets Python build output. The dashboard keeps shared
+# modules in frontend/src/lib, which must be committed or the build breaks.
+!frontend/src/lib/
+!frontend/src/lib/**
+
+# Bytecode caches inside the force-tracked source folders
+**/__pycache__/
+
+# Local MLflow backend store (recreated by training runs)
+mlflow.db
+mlflow.db-*
