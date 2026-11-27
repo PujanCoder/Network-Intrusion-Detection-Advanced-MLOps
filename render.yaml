@@ -1,0 +1,47 @@
+# Render Blueprint for the NDR platform.
+#
+# One web service serves the FastAPI API, the WebSocket stream and the compiled
+# React dashboard (built inside the Docker image). The Zeek sensor is NOT part of
+# this service: it runs on the network you want to monitor and pushes records to
+# POST /api/ingest/zeek over HTTPS. See docs/DEPLOY_RENDER.md.
+#
+# NOTE: `disk` requires a paid instance type on Render. On the free plan the
+# container filesystem is ephemeral: the SQLite database is recreated on every
+# deploy/restart and events are lost. docs/DEPLOY_RENDER.md explains the options.
+services:
+  - type: web
+    name: ndr-platform
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: feature/realtime-ndr-platform
+    dockerfilePath: ./deploy/Dockerfile.serving
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: ndr-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      # Runtime state on the persistent disk.
+      - key: NDR_DB_PATH
+        value: /var/data/ndr.db
+      - key: NDR_ZEEK_LOG_DIR
+        value: /var/data/zeek
+      # No Zeek process runs inside this container; events arrive over HTTPS.
+      - key: NDR_INGEST_ENABLED
+        value: "false"
+      - key: NDR_SENSOR_MODE
+        value: remote
+      - key: NDR_FRONTEND_DIST
+        value: /app/frontend/dist
+      - key: NDR_RETENTION_DAYS
+        value: "30"
+      # Secrets: set the values in the Render dashboard, never in git.
+      # NDR_API_KEY also enables POST /api/ingest/zeek (it fails closed without it).
+      - key: NDR_API_KEY
+        sync: false
+      # Optional: restrict browser access if you host the dashboard elsewhere.
+      # - key: NDR_CORS_ORIGINS
+      #   value: https://your-dashboard.example.com

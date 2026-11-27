@@ -23,6 +23,8 @@ CICIDS2017 intrusion-detection ML pipeline, which is still in the repository and
 | 10 rule-based behavioural detectors | Implemented, tested |
 | FastAPI REST + WebSocket API | Implemented, tested, executed |
 | React dashboard, 6 pages, live updates | Built, executed in a browser |
+| Authenticated remote ingestion (`POST /api/ingest/zeek`) | Implemented, tested |
+| Hosted deployment (Render, Docker, `$PORT`, persistent disk) | Configured (`render.yaml`), see [`docs/DEPLOY_RENDER.md`](docs/DEPLOY_RENDER.md) |
 | 85 automated tests | Passing |
 | Batch CICIDS2017 pipeline (MLflow/DagsHub/DVC) | Preserved |
 | Live Zeek capture on a real interface | **Not verified here** (no Zeek in this container) |
@@ -190,6 +192,7 @@ failure (CI sets it after a successful `dvc pull`).
 | GET | `/api/model` | live model vs batch model, runtime counters |
 | GET | `/api/detections` | rule hit counts and detector catalogue |
 | GET | `/api/sensors` | sensor state, ingestion offsets, DB/API/WS status, processing delay |
+| POST | `/api/ingest/zeek` | authenticated push of Zeek records from a remote sensor (requires `NDR_API_KEY`) |
 | WS | `/api/ws` | `hello`, `event`, `metrics`, `ping` |
 
 ---
@@ -208,6 +211,22 @@ failure (CI sets it after a successful `dvc pull`).
 
 ---
 
+## Hosted deployment (Render)
+
+`render.yaml` deploys the API, WebSocket and dashboard as one Docker web service
+(the Zeek sensor stays on your network and pushes records over HTTPS). The
+step-by-step guide — Blueprint import, environment variables, persistent disk,
+free-plan caveats, sensor forwarding and verification — is in
+[`docs/DEPLOY_RENDER.md`](docs/DEPLOY_RENDER.md).
+
+```bash
+# on the sensor host, with the same NDR_API_KEY the service uses
+python scripts/zeek_forward.py --url https://<service>.onrender.com \
+    --log /opt/zeek/logs/current/conn.log --follow
+```
+
+---
+
 ## Repository layout
 
 ```
@@ -219,9 +238,10 @@ src/models/         batch training and evaluation (LR / DT / RF)
 frontend/           React + TypeScript + Vite + Recharts dashboard
 models/             zeek/ live model, best_model.joblib batch model
 reports/            evaluation reports, threshold sweep, model card
-scripts/            run_api.sh, zeek_live.sh, replay_zeek_holdout.py
+scripts/            run_api.sh, zeek_live.sh, replay_zeek_holdout.py, zeek_forward.py
 tests/              85 tests (parser, features, store, reader, detectors, API)
-docs/               PROJECT_ARCHITECTURE.md
+docs/               PROJECT_ARCHITECTURE.md, DEPLOY_RENDER.md
+render.yaml         Render Blueprint (web service + persistent disk)
 ```
 
 ## Configuration
@@ -230,17 +250,20 @@ All runtime settings are environment variables (see `src/realtime/config.py`):
 `NDR_ZEEK_LOG_DIR`, `NDR_DB_PATH`, `NDR_MODEL_PATH`, `NDR_SENSOR_ID`, `NDR_SENSOR_MODE`,
 `NDR_POLL_INTERVAL`, `NDR_INGEST_ENABLED`, `NDR_CORS_ORIGINS`, `NDR_RETENTION_DAYS`,
 `NDR_FRONTEND_DIST`, `NDR_METRICS_WINDOW`, `NDR_WS_METRICS_INTERVAL`, `NDR_MAX_WS_CLIENTS`,
-`NDR_WS_QUEUE_SIZE`, `NDR_API_HOST`, `NDR_API_PORT`, `NDR_API_KEY`.
+`NDR_WS_QUEUE_SIZE`, `NDR_API_HOST`, `NDR_API_PORT` (or `PORT`, which hosted platforms
+inject), `NDR_API_KEY`, `NDR_INGEST_MAX_BATCH`.
 
 `NDR_API_KEY` is optional and off by default. When set, every `/api/*` call except
 `/api/health` must send it as `X-API-Key` (or `Authorization: Bearer`), and the WebSocket
-must pass `?api_key=...`. The dashboard reads the same value from `VITE_API_KEY` at build
-time.
+must pass `?api_key=...`. The dashboard prompts for it and stores it in `localStorage`
+(`VITE_API_KEY` only pre-fills it at build time). Setting `NDR_API_KEY` also enables
+`POST /api/ingest/zeek`; without it, remote ingestion fails closed with 503.
 
 ## Known limitations
 
 No live sensor validation in this environment; weak cross-dataset transfer; metadata-only
 detection (no payload analysis); SQLite single-node storage; authentication is opt-in
 (`NDR_API_KEY`) rather than enforced by default; heuristic detector thresholds that need
-per-site tuning. The full list, with context, is in
+per-site tuning; on a Render free instance the SQLite file is ephemeral, so durable event
+history needs a paid plan with a disk (see `docs/DEPLOY_RENDER.md`). The full list, with context, is in
 [`docs/PROJECT_ARCHITECTURE.md`](docs/PROJECT_ARCHITECTURE.md#12-current-limitations).
