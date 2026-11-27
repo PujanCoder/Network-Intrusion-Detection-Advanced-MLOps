@@ -1,6 +1,15 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 
 router = APIRouter()
+
+
+@router.get("/")
+def index():
+    p = Path(__file__).resolve().parents[1] / "templates" / "index.html"
+    return FileResponse(p)
 
 
 @router.get("/api/v1/detections")

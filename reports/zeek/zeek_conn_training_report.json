@@ -1,0 +1,64 @@
+{
+  "schema_version": "zeek_conn_v1",
+  "feature_names": [
+    "duration",
+    "orig_bytes",
+    "resp_bytes",
+    "missed_bytes",
+    "orig_pkts",
+    "orig_ip_bytes",
+    "resp_pkts",
+    "resp_ip_bytes",
+    "proto_tcp",
+    "proto_udp",
+    "proto_icmp",
+    "service_dns",
+    "service_http",
+    "service_ssl",
+    "service_ssh",
+    "service_other",
+    "conn_state_SF",
+    "conn_state_S0",
+    "conn_state_REJ",
+    "conn_state_RSTO",
+    "conn_state_other",
+    "bytes_ratio",
+    "pkts_ratio",
+    "bytes_per_pkt_orig",
+    "bytes_per_pkt_resp"
+  ],
+  "classes": [
+    "BENIGN",
+    "MALICIOUS"
+  ],
+  "dataset": "data\\processed\\zeek\\zeek_conn_lab_dataset.csv",
+  "rows": 300,
+  "report": {
+    "BENIGN": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 38.0
+    },
+    "MALICIOUS": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 37.0
+    },
+    "accuracy": 1.0,
+    "macro avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 75.0
+    },
+    "weighted avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 75.0
+    }
+  },
+  "note": "Lab baseline trained on synthetic Zeek conn feature dataset for pipeline demonstration; not production-grade."
+}
