@@ -4,6 +4,10 @@ from pathlib import Path
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
+import joblib
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -161,6 +165,23 @@ def main():
     logger.info("Data drift validation completed.")
     logger.info("Report saved at: %s", REPORT_PATH)
 
+def build_preprocessor(numeric_cols: list[str], categorical_cols: list[str]) -> ColumnTransformer:
+    """Single source of truth for the preprocessing pipeline.
+    Called by both train_model.py and the serving layer.
+    """
+    return ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), numeric_cols),
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols),
+        ],
+        remainder="drop",
+    )
 
+def save_preprocessor(preprocessor, feature_order: list[str], path: str):
+    import joblib
+    joblib.dump(
+        {"preprocessor": preprocessor, "feature_order": feature_order},
+        path,
+    )
 if __name__ == "__main__":
     main()

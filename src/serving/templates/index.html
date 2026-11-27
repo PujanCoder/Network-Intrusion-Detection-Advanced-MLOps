@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NIDS Live Dashboard</title>
+  <style>
+    :root { --bg:#0b1220; --card:#121b2f; --muted:#93a4bf; --text:#e6edf7; --ok:#22c55e; --bad:#ef4444; --warn:#f59e0b; --line:#22314f; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, sans-serif; background:linear-gradient(180deg,#09101d,#0f172a); color:var(--text); }
+    .wrap { max-width:1400px; margin:0 auto; padding:20px; }
+    h1 { margin:0 0 6px; font-size:28px; }
+    .sub { color:var(--muted); margin-bottom:18px; }
+    .grid { display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap:12px; margin-bottom:16px; }
+    .card { background:rgba(18,27,47,.95); border:1px solid var(--line); border-radius:12px; padding:14px; }
+    .k { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .v { font-size:28px; font-weight:700; margin-top:6px; }
+    .row { display:grid; grid-template-columns: 1fr; gap:12px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-weight:600; position:sticky; top:0; background:#121b2f; }
+    .table-wrap { max-height:420px; overflow:auto; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
+    .benign { background:rgba(34,197,94,.15); color:#86efac; }
+    .attack { background:rgba(239,68,68,.15); color:#fca5a5; }
+    .unk { background:rgba(245,158,11,.15); color:#fcd34d; }
+    .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+    .small { color:var(--muted); font-size:12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    @media (max-width:1100px){ .grid{grid-template-columns:repeat(3,1fr);} }
+    @media (max-width:700px){ .grid{grid-template-columns:repeat(2,1fr);} }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Real-time NIDS Dashboard</h1>
+    <div class="sub">FastAPI + Zeek ingestion + ML inference. CICIDS baseline preserved; Zeek uses separate Zeek-compatible model/schema.</div>
+
+    <div class="grid">
+      <div class="card"><div class="k">Zeek Events</div><div class="v" id="zeekTotal">0</div></div>
+      <div class="card"><div class="k">Scored Detections</div><div class="v" id="detScored">0</div></div>
+      <div class="card"><div class="k">Attacks</div><div class="v bad" id="detAttacks">0</div></div>
+      <div class="card"><div class="k">Unclassified</div><div class="v warn" id="detUnk">0</div></div>
+      <div class="card"><div class="k">Zeek Status</div><div class="v" id="zeekStatus">...</div></div>
+      <div class="card"><div class="k">Model</div><div class="v" style="font-size:16px" id="modelStatus">...</div></div>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div><strong>Recent Zeek ML Detections</strong><div class="small">Actual model outputs from Zeek-compatible baseline (or UNCLASSIFIED when not scorable)</div></div>
+          <div class="small" id="lastUpdate">never</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Src</th><th>Dst</th><th>Proto</th><th>Service</th><th>Label</th><th>Confidence</th><th>Status</th><th>Reason</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <strong>Zeek Ingestion / Sensor Status</strong>
+        <pre class="small mono" id="statusBox" style="white-space:pre-wrap;margin:10px 0 0;"></pre>
+      </div>
+    </div>
+  </div>
+
+<script>
+const API_KEY = new URLSearchParams(location.search).get('api_key') || localStorage.getItem('ids_api_key') || '';
+if (API_KEY) localStorage.setItem('ids_api_key', API_KEY);
+function headers() { return API_KEY ? {'X-API-Key': API_KEY} : {}; }
+
+function pill(label, isAttack, status) {
+  if (status !== 'scored') return `<span class="pill unk">${label}</span>`;
+  return `<span class="pill ${isAttack ? 'attack' : 'benign'}">${label}</span>`;
+}
+function fmtTs(ts) { try { return new Date(ts).toLocaleString(); } catch { return ts || ''; } }
+
+async function refresh() {
+  try {
+    const [sRes, dRes, hRes] = await Promise.all([
+      fetch('/api/v1/zeek/status', {headers: headers()}),
+      fetch('/api/v1/zeek/detections?limit=100', {headers: headers()}),
+      fetch('/api/v1/health', {headers: headers()}).catch(() => null)
+    ]);
+    if (!sRes.ok) throw new Error('zeek status ' + sRes.status);
+    if (!dRes.ok) throw new Error('zeek detections ' + dRes.status);
+    const s = await sRes.json();
+    const d = await dRes.json();
+    const h = hRes && hRes.ok ? await hRes.json() : null;
+
+    const counts = s.counts || {};
+    const dets = d.detections || [];
+    const unclassified = dets.filter(x => x.status !== 'scored').length;
+    document.getElementById('zeekTotal').textContent = counts.total ?? 0;
+    document.getElementById('detScored').textContent = counts.detections_scored ?? 0;
+    document.getElementById('detAttacks').textContent = counts.detections_attacks ?? 0;
+    document.getElementById('detUnk').textContent = unclassified;
+    document.getElementById('zeekStatus').innerHTML = (s.sensors && s.sensors.length) ? '<span class="ok">active</span>' : '<span class="warn">idle</span>';
+    document.getElementById('modelStatus').innerHTML = h ? `<span class="ok">CICIDS loaded</span><div class="small mono">${h.model} (${h.model_features} feats)</div><div class="small">Zeek model: see detections</div>` : '<span class="warn">health unavailable</span>';
+    document.getElementById('statusBox').textContent = JSON.stringify(s, null, 2);
+    document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+
+    const rows = document.getElementById('rows');
+    rows.innerHTML = dets.map(x => `
+      <tr>
+        <td class="mono">${fmtTs(x.ts)}</td>
+        <td class="mono">${x.src_ip || ''}${x.src_port ? ':'+x.src_port : ''}</td>
+        <td class="mono">${x.dst_ip || ''}${x.dst_port ? ':'+x.dst_port : ''}</td>
+        <td>${x.proto || ''}</td>
+        <td>${x.service || ''}</td>
+        <td>${pill(x.label, !!x.is_attack, x.status)}</td>
+        <td>${x.confidence == null ? '' : Number(x.confidence).toFixed(3)}</td>
+        <td>${x.status || ''}</td>
+        <td class="small">${x.reason || ''}</td>
+      </tr>`).join('');
+  } catch (e) {
+    document.getElementById('zeekStatus').innerHTML = '<span class="bad">error</span>';
+    document.getElementById('statusBox').textContent = String(e);
+  }
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

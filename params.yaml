@@ -1,12 +1,18 @@
 data:
-  X_train: data/processed/transformed/X_train_transformed.csv
-  X_test: data/processed/transformed/X_test_transformed.csv
+  X_train: data/processed/transformed/X_train_selected.csv
+  X_test:  data/processed/transformed/X_test_selected.csv
   y_train: data/processed/transformed/y_train.csv
-  y_test: data/processed/transformed/y_test.csv
+  y_test:  data/processed/transformed/y_test.cs
 model:
+  # --- training hyperparameters ---
   random_state: 42
   test_size: 0.20
 
+  # --- artifact paths (used by serving + validation) ---
+  path: models/best_model.joblib
+  preprocessor_path: models/preprocessor.joblib
+
+  # --- algorithm configs ---
   algorithms:
     logistic_regression:
       max_iter: 2000
@@ -27,3 +33,21 @@ model:
 mlflow:
   experiment_name: Network-Intrusion-Detection
   registered_model_name: Network-Intrusion-Detection-Model
+
+serving:
+  host: 0.0.0.0
+  port: 8000
+  api_key_env: IDS_API_KEY
+  db_path: data/live/ids.db
+  allowed_origins:
+    - http://localhost:8000
+
+sensor:
+  api_url: http://127.0.0.1:8000
+  api_key_env: SENSOR_API_KEY
+  interface: eth0
+  idle_timeout: 30.0
+  flow_timeout: 120.0
+  batch_size: 32
+  flush_interval: 0.5
+  queue_max: 10000

@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from pathlib import Path
 
 import dagshub
@@ -107,9 +108,7 @@ def load_evaluation_data():
     if len(X_test) != len(y_test):
         raise ValueError("Testing feature-label mismatch.")
 
-    # Reproduce the same validation split used during training.
     test_size = params["model"]["test_size"]
-
     random_state = params["model"]["random_state"]
 
     X_fit, X_val, y_fit, y_val = train_test_split(
@@ -121,7 +120,6 @@ def load_evaluation_data():
     )
 
     logger.info("Validation dataset: %s", X_val.shape)
-
     logger.info("Testing dataset: %s", X_test.shape)
 
     return X_val, y_val, X_test, y_test
@@ -136,67 +134,41 @@ def calculate_metrics(model, X, y):
     predictions = model.predict(X)
 
     metrics = {
-
-        "accuracy": float(
-            accuracy_score(y, predictions)
-        ),
-
+        "accuracy": float(accuracy_score(y, predictions)),
         "precision": float(
             precision_score(
-                y,
-                predictions,
-                average="binary",
-                pos_label="DDoS",
-                zero_division=0,
+                y, predictions, average="binary",
+                pos_label="DDoS", zero_division=0,
             )
         ),
-
         "recall": float(
             recall_score(
-                y,
-                predictions,
-                average="binary",
-                pos_label="DDoS",
-                zero_division=0,
+                y, predictions, average="binary",
+                pos_label="DDoS", zero_division=0,
             )
         ),
-
         "f1_score": float(
             f1_score(
-                y,
-                predictions,
-                average="binary",
-                pos_label="DDoS",
-                zero_division=0,
+                y, predictions, average="binary",
+                pos_label="DDoS", zero_division=0,
             )
         ),
-
     }
 
-    # ROC-AUC
     if hasattr(model, "predict_proba"):
-
         probabilities = model.predict_proba(X)
-
         classes = list(model.classes_)
-
         if "DDoS" in classes:
-
             ddos_index = classes.index("DDoS")
-
             metrics["roc_auc"] = float(
                 roc_auc_score(
                     (y == "DDoS").astype(int),
                     probabilities[:, ddos_index],
                 )
             )
-
         else:
-
             metrics["roc_auc"] = None
-
     else:
-
         metrics["roc_auc"] = None
 
     return metrics
@@ -206,49 +178,37 @@ def calculate_metrics(model, X, y):
 # GET COMPLETED CANDIDATE MODEL RUNS
 # ==========================================================
 
-def get_completed_model_runs(experiment_name):
+def get_completed_model_runs(experiment_name, since_ms=None):
 
     initialize_mlflow()
 
-    experiment = mlflow.get_experiment_by_name(
-        experiment_name
-    )
+    experiment = mlflow.get_experiment_by_name(experiment_name)
 
     if experiment is None:
-
         raise ValueError(
             f"MLflow experiment '{experiment_name}' not found."
         )
 
+    filter_parts = [
+        "attributes.status = 'FINISHED'",
+        "tags.model_role = 'candidate'",
+    ]
+    if since_ms is not None:
+        filter_parts.append(f"attributes.start_time > {since_ms}")
+
     runs = mlflow.search_runs(
-
-        experiment_ids=[
-            experiment.experiment_id
-        ],
-
-        filter_string=(
-            "attributes.status = 'FINISHED' "
-            "and tags.model_role = 'candidate'"
-        ),
-
-        order_by=[
-            "start_time DESC"
-        ],
-
+        experiment_ids=[experiment.experiment_id],
+        filter_string=" and ".join(filter_parts),
+        order_by=["start_time DESC"],
     )
 
     if runs.empty:
-
         raise ValueError(
             "No completed candidate model runs found. "
             "Run model training first."
         )
 
-    logger.info(
-        "Found %d candidate runs.",
-        len(runs),
-    )
-
+    logger.info("Found %d candidate runs.", len(runs))
     return runs
 
 
@@ -258,6 +218,7 @@ def get_completed_model_runs(experiment_name):
 
 def evaluate_models(
     experiment_name="Network-Intrusion-Detection",
+    run_window_minutes=60,
 ):
 
     logger.info("Starting model evaluation.")
@@ -265,13 +226,24 @@ def evaluate_models(
     # Load validation and test datasets
     X_val, y_val, X_test, y_test = load_evaluation_data()
 
-    # Get candidate runs
+    expected_n_features = X_val.shape[1]
+    logger.info(
+        "Expected model feature count: %d", expected_n_features
+    )
+
+    # Restrict candidate search to runs from this pipeline invocation
+    since_ms = int((time.time() - run_window_minutes * 60) * 1000)
+    logger.info(
+        "Searching runs started after %s (last %d min)",
+        pd.to_datetime(since_ms, unit="ms", utc=True),
+        run_window_minutes,
+    )
+
     runs = get_completed_model_runs(
-        experiment_name
+        experiment_name, since_ms=since_ms
     )
 
     results = []
-
     evaluated_models = {}
 
     # ------------------------------------------------------
@@ -281,45 +253,37 @@ def evaluate_models(
     for _, run in runs.iterrows():
 
         run_id = run["run_id"]
-
-        # Correct Pandas Series access
         model_uri = run.get("tags.model_uri")
 
         if pd.isna(model_uri) or not model_uri:
-
             logger.warning(
-                "No logged model URI found for run %s",
-                run_id,
+                "No logged model URI found for run %s", run_id
             )
-
             continue
 
         try:
+            logger.info("Loading model from run: %s", run_id)
 
-            logger.info(
-                "Loading model from run: %s",
-                run_id,
-            )
+            model = mlflow.sklearn.load_model(model_uri)
 
-            # Load logged MLflow model
-            model = mlflow.sklearn.load_model(
-                model_uri
-            )
+            # --- Feature-count guard ---
+            n_feats = getattr(model, "n_features_in_", None)
+            if n_feats is not None and n_feats != expected_n_features:
+                logger.warning(
+                    "Skipping run %s: has %d features, expected %d",
+                    run_id, n_feats, expected_n_features,
+                )
+                continue
+            # --- end guard ---
 
             validation_metrics = calculate_metrics(
-                model,
-                X_val,
-                y_val,
+                model, X_val, y_val
             )
 
             results.append({
-
                 "run_id": run_id,
-
                 "model_uri": model_uri,
-
                 **validation_metrics,
-
             })
 
             evaluated_models[run_id] = model
@@ -331,17 +295,16 @@ def evaluate_models(
             )
 
         except Exception as error:
-
             logger.exception(
-                "Could not evaluate run %s: %s",
-                run_id,
-                error,
+                "Could not evaluate run %s: %s", run_id, error
             )
 
     if not results:
-
         raise RuntimeError(
-            "No compatible candidate models could be evaluated."
+            "No compatible candidate models could be evaluated. "
+            "Check that training just ran with the current feature set "
+            "and that data/processed/transformed/X_train_selected.csv "
+            "has the same columns as what train_model.py used."
         )
 
     # ------------------------------------------------------
@@ -349,37 +312,24 @@ def evaluate_models(
     # ------------------------------------------------------
 
     results_df = pd.DataFrame(results)
-
     results_df = results_df.sort_values(
-        by="f1_score",
-        ascending=False,
+        by="f1_score", ascending=False
     ).reset_index(drop=True)
 
     comparison_path = REPORT_DIR / "model_comparison.csv"
-
-    results_df.to_csv(
-        comparison_path,
-        index=False,
-    )
+    results_df.to_csv(comparison_path, index=False)
 
     # ------------------------------------------------------
     # SELECT BEST MODEL
     # ------------------------------------------------------
 
     best_result = results_df.iloc[0]
-
     best_run_id = best_result["run_id"]
-
     best_model = evaluated_models[best_run_id]
 
+    logger.info("Best model selected: %s", best_run_id)
     logger.info(
-        "Best model selected: %s",
-        best_run_id,
-    )
-
-    logger.info(
-        "Best validation F1: %.5f",
-        best_result["f1_score"],
+        "Best validation F1: %.5f", best_result["f1_score"]
     )
 
     # ------------------------------------------------------
@@ -390,15 +340,9 @@ def evaluate_models(
         "Evaluating selected model on untouched test data."
     )
 
-    test_metrics = calculate_metrics(
-        best_model,
-        X_test,
-        y_test,
-    )
+    test_metrics = calculate_metrics(best_model, X_test, y_test)
 
-    test_predictions = best_model.predict(
-        X_test
-    )
+    test_predictions = best_model.predict(X_test)
 
     report = classification_report(
         y_test,
@@ -418,60 +362,30 @@ def evaluate_models(
     # ------------------------------------------------------
 
     evaluation_results = {
-
         "best_run_id": best_run_id,
-
         "model_uri": best_result["model_uri"],
-
         "validation_metrics": {
-
             key: (
                 None if pd.isna(best_result[key])
                 else float(best_result[key])
             )
-
             for key in [
-                "accuracy",
-                "precision",
-                "recall",
-                "f1_score",
-                "roc_auc",
+                "accuracy", "precision", "recall",
+                "f1_score", "roc_auc",
             ]
-
         },
-
         "test_metrics": test_metrics,
-
         "classification_report": report,
-
         "confusion_matrix": confusion.tolist(),
-
     }
 
     results_path = REPORT_DIR / "evaluation_results.json"
 
-    with open(
-        results_path,
-        "w",
-        encoding="utf-8",
-    ) as file:
+    with open(results_path, "w", encoding="utf-8") as file:
+        json.dump(evaluation_results, file, indent=4)
 
-        json.dump(
-            evaluation_results,
-            file,
-            indent=4,
-        )
-
-    logger.info(
-        "Model comparison saved: %s",
-        comparison_path,
-    )
-
-    logger.info(
-        "Evaluation results saved: %s",
-        results_path,
-    )
-
+    logger.info("Model comparison saved: %s", comparison_path)
+    logger.info("Evaluation results saved: %s", results_path)
     logger.info("Model evaluation completed successfully.")
 
     return evaluation_results
@@ -482,5 +396,4 @@ def evaluate_models(
 # ==========================================================
 
 if __name__ == "__main__":
-
     evaluate_models()

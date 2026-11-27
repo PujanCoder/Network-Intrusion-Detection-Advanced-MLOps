@@ -261,3 +261,14 @@ mlruns/
 # Frontend dependencies and build output (built in CI / by scripts/run_api.sh)
 frontend/node_modules/
 frontend/dist/
+# Force-track project source folders and tests
+!src/serving/
+!src/serving/**
+!src/features/zeek/
+!src/features/zeek/**
+!src/ingestion/zeek/
+!src/ingestion/zeek/**
+!tests/fixtures/
+!tests/fixtures/**
+!tests/ingestion/
+!tests/ingestion/**

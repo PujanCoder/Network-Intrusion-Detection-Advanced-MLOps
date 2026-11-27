@@ -73,12 +73,12 @@ stages:
       size: 6115
     - path: src/features/data_preprocessing.py
       hash: md5
-      md5: f45b85ae65a6274951921e849978a69c
-      size: 3944
+      md5: 7ca447cf4f9a712600abfaa8500f46fe
+      size: 4803
     - path: src/features/feature_transformation.py
       hash: md5
-      md5: 9b083f33b9daab9bdef7a12715ee2163
-      size: 3219
+      md5: b6a2e189072b932004e26e003296dad0
+      size: 3609
     - path: src/features/transformation_validation.py
       hash: md5
       md5: 1fe6e3fce28592819f58f42ca5be442c
@@ -89,7 +89,7 @@ stages:
       size: 11127
     - path: src/models/train_model.py
       hash: md5
-      md5: 3d464c509436557bb8bbf2d4d7c1bb11
+      md5: 8d3ac09504b9297883cd3e43c6957c7f
       size: 10983
     - path: src/pipelines/pipeline.py
       hash: md5
@@ -108,6 +108,8 @@ stages:
         model:
           random_state: 42
           test_size: 0.2
+          path: models/best_model.joblib
+          preprocessor_path: models/preprocessor.joblib
           algorithms:
             logistic_regression:
               max_iter: 2000
@@ -129,14 +131,42 @@ stages:
       size: 81779491
     - path: data/processed/transformed
       hash: md5
-      md5: dab7daad8ea6e3d314ce87aace79d511.dir
-      size: 539296078
-      nfiles: 8
+      md5: 2a131ef7ac01423b1cb9ecc41aabff3f.dir
+      size: 539287114
+      nfiles: 7
     - path: models/best_model.joblib
       hash: md5
       md5: 5a60a301926b7b183e028210a9509211
       size: 2698297
+    - path: models/preprocessor.joblib
+      hash: md5
+      md5: c6e28c5e54c7838796a251b841e246df
+      size: 9332
     - path: reports/training_results.json
       hash: md5
       md5: a6d400f9365f95f63e3990d288f19e9c
       size: 1254
+  validate_preprocessor:
+    cmd: python -m src.serving.validate_artifacts
+    deps:
+    - path: models/best_model.joblib
+      hash: md5
+      md5: 5a60a301926b7b183e028210a9509211
+      size: 2698297
+    - path: models/preprocessor.joblib
+      hash: md5
+      md5: 66d5ee0cd4a3afc6937e2ddbd99ef008
+      size: 10795
+    - path: src/serving/validate_artifacts.py
+      hash: md5
+      md5: 7c6fd94214df2cf28e677ab8840ec72b
+      size: 1559
+    params:
+      params.yaml:
+        model.path: models/best_model.joblib
+        model.preprocessor_path: models/preprocessor.joblib
+    outs:
+    - path: reports/serving_validation.json
+      hash: md5
+      md5: 6346dc4757e5da24958784583113bec1
+      size: 158

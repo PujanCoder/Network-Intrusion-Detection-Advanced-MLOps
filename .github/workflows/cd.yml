@@ -1,50 +1,37 @@
-name: CD
-
+name: cd
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+    paths:
+      - 'src/serving/**'
+      - 'src/sensor/**'
+      - 'src/features/**'
+      - 'models/**'
+      - 'params.yaml'
 
 jobs:
-  run-pipeline:
+  build-and-push:
     runs-on: ubuntu-latest
-
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      DAGSHUB_USER_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}   
-
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_SESSION_TOKEN: ""
-
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install "dvc[s3]"
+      - name: Install
+        run: pip install -r requirements.txt
 
-      - name: Debug creds
-        run: |
-          echo "Access length: ${#AWS_ACCESS_KEY_ID}"
-          echo "Secret length: ${#AWS_SECRET_ACCESS_KEY}"
-          echo "Token set: ${AWS_SESSION_TOKEN:+yes}"
+      - name: Validate artifacts (fail fast)
+        run: python -m src.serving.validate_artifacts
 
-      - name: Pull raw dataset                        # ← TARGETED pull
-        run: dvc pull -r origin data/raw/MachineLearningCSV.dvc -v
+      - name: Smoke test predictor
+        run: pytest tests/test_feature_contract.py -x
 
-      - name: Verify dataset exists
-        run: |
-          ls -la data/raw/MachineLearningCSV/ || true
-          test -f data/raw/MachineLearningCSV/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv \
-            && echo "✅ Dataset present" \
-            || (echo "❌ Dataset missing" && exit 1)
+      - name: Build serving image
+        run: docker build -f deploy/Dockerfile.serving -t nids-serving:${{ github.sha }} .
 
-      - name: Run pipeline
-        run: python -m src.pipelines.pipeline
+      - name: Build sensor image
+        run: docker build -f deploy/Dockerfile.sensor -t nids-sensor:${{ github.sha }} .
+
+      # push steps depend on your registry (GHCR/ECR/...)
