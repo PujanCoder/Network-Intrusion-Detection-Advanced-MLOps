@@ -2,7 +2,6 @@ import json
 import logging
 from pathlib import Path
 
-import dagshub
 import joblib
 import mlflow
 import mlflow.sklearn
@@ -16,6 +15,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 
+
+from src.models.tracking import configure_tracking
 
 from sklearn.metrics import (
     accuracy_score,
@@ -69,11 +70,7 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 def initialize_mlflow():
 
-    dagshub.init(
-        repo_owner="pujanpandey012",
-        repo_name="Network-Intrusion-Detection-Advanced-MLOps",
-        mlflow=True,
-    )
+    configure_tracking()
 
     experiment_name = params["mlflow"]["experiment_name"]
 

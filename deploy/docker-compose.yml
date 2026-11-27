@@ -1,24 +1,52 @@
+name: ndr-platform
+
 services:
   serving:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.serving
-    ports: ["8000:8000"]
+    ports:
+      - "8000:8000"
     environment:
-      IDS_API_KEY: ${IDS_API_KEY}
+      NDR_DB_PATH: /app/data/realtime/ndr.db
+      NDR_ZEEK_LOG_DIR: /var/log/zeek
+      NDR_INGEST_ENABLED: "true"
+      NDR_SENSOR_MODE: ${NDR_SENSOR_MODE:-live}
+      NDR_CORS_ORIGINS: ${NDR_CORS_ORIGINS:-http://localhost:8000}
+      # Optional shared secret; when set, REST and WebSocket calls must present it.
+      NDR_API_KEY: ${NDR_API_KEY:-}
     volumes:
-      - ../data/live:/app/data/live
+      - ndr-data:/app/data
+      - zeek-logs:/var/log/zeek:ro
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
 
   sensor:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.sensor
-    cap_add: [NET_RAW, NET_ADMIN]
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
     network_mode: host
     environment:
-      SENSOR_API_URL: http://127.0.0.1:8000
-      SENSOR_API_KEY: ${SENSOR_API_KEY}
       SENSOR_INTERFACE: ${IFACE:-eth0}
-    depends_on: [serving]
+      NDR_ZEEK_LOG_DIR: /var/log/zeek
+    volumes:
+      - zeek-logs:/var/log/zeek
+    depends_on:
+      - serving
     restart: unless-stopped
+
+volumes:
+  ndr-data:
+  zeek-logs:

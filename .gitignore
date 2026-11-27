@@ -218,43 +218,68 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-@"
-.venv/
-__pycache__/
-*.py[cod]
-.ipynb_checkpoints/
 
-data/raw/*
-data/interim/*
-data/processed/*
+# ---------------------------------------------------------------------------
+# Project-specific rules
+# ---------------------------------------------------------------------------
 
-mlruns/
-*.log
-.env
-.env
-.venv/
-__pycache__/
-*.pyc
-data/interim/
-
-# Raw CIC-IDS2017 datasets
-data/raw/*
-!data/raw/MachineLearningCSV.dvc
-# Processed datasets
-data/processed/
-
-# Python environments
+# Local virtual environments
 .venv/
 venv/
-__pycache__/
-*.pyc
+env/
 
-# ML artifacts
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Raw and processed CICIDS2017 data (DVC-tracked)
+data/raw/*
+!data/raw/MachineLearningCSV.dvc
+data/interim/
+data/processed/
+
+# Downloaded public datasets (UNSW-NB15, NSL-KDD) - fetch, do not vendor
+data/external/
+
+# Real-time NDR runtime state
+data/realtime/
+data/zeek_logs/
+*.db
+*.db-wal
+*.db-shm
+
+# MLflow local store
 mlruns/
-artifacts/
+
+# Model binaries are large; the live Zeek model is the exception because the
+# API loads it at startup.
 *.pkl
 *.joblib
 *.pt
 *.pth
+!models/zeek/zeek_model.joblib
 
-"@ | Set-Content .gitignore
+# Frontend dependencies and build output (built in CI / by scripts/run_api.sh)
+frontend/node_modules/
+frontend/dist/
+# Force-track project source folders and tests
+!src/serving/
+!src/serving/**
+!src/features/zeek/
+!src/features/zeek/**
+!src/ingestion/zeek/
+!src/ingestion/zeek/**
+!tests/fixtures/
+!tests/fixtures/**
+!tests/ingestion/
+!tests/ingestion/**
+# `lib/` above targets Python build output. The dashboard keeps shared
+# modules in frontend/src/lib, which must be committed or the build breaks.
+!frontend/src/lib/
+!frontend/src/lib/**
+
+# Bytecode caches inside the force-tracked source folders
+**/__pycache__/
+
+# Local MLflow backend store (recreated by training runs)
+mlflow.db
+mlflow.db-*

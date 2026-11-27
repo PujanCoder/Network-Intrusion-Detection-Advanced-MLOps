@@ -1,16 +1,26 @@
-
 name: Continuous Integration
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "feature/**"]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  python:
+    name: Python tests and DVC validation
     runs-on: ubuntu-latest
-
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      DAGSHUB_USER_TOKEN: ${{ secrets.DAGSHUB_USER_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,15 +28,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14.6"
-
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
-      - name: Verify dependencies
+      - name: Verify imports
         run: |
           python -c "import sklearn; print('scikit-learn:', sklearn.__version__)"
           python -c "import pandas; print('pandas:', pandas.__version__)"
@@ -34,12 +45,127 @@ jobs:
           python -c "import mlflow; print('MLflow:', mlflow.__version__)"
           python -c "import dagshub; print('DagsHub:', dagshub.__version__)"
           python -c "import dvc; print('DVC:', dvc.__version__)"
+          python -c "import fastapi, pydantic_settings; print('FastAPI:', fastapi.__version__)"
 
       - name: Check dependency conflicts
         run: python -m pip check
 
       - name: Compile source and tests
-        run: python -m compileall -q src tests
+        run: python -m compileall -q src tests train.py sensor.py
+
+      - name: Lint (errors only)
+        run: |
+          python -m pip install ruff
+          python -m ruff check --select E9,F63,F7,F82 src tests train.py sensor.py
+
+      - name: Validate DVC pipeline definition
+        run: |
+          python -m dvc stage list
+          python -m dvc dag
+
+      - name: Pull batch model artefacts (optional)
+        if: env.DAGSHUB_USER_TOKEN != ''
+        run: |
+          python -m dvc remote modify origin --local auth basic
+          python -m dvc remote modify origin --local user pujanpandey012
+          python -m dvc remote modify origin --local password "$DAGSHUB_USER_TOKEN"
+          if python -m dvc pull models/best_model.joblib models/preprocessor.joblib; then
+            echo "NDR_REQUIRE_ARTIFACTS=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::DVC pull failed; artefact-dependent tests will be skipped."
+          fi
 
       - name: Run tests
         run: python -m pytest tests/ -v
+
+      - name: API smoke test
+        env:
+          NDR_DB_PATH: /tmp/ndr-ci/ndr.db
+          NDR_ZEEK_LOG_DIR: /tmp/ndr-ci/zeek
+          NDR_INGEST_ENABLED: "false"
+          NDR_FRONTEND_DIST: /tmp/ndr-ci/dist
+        run: |
+          mkdir -p /tmp/ndr-ci/zeek
+          python -m uvicorn src.api.app:app --host 127.0.0.1 --port 8099 --log-level warning &
+          server_pid=$!
+          trap 'kill $server_pid' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8099/api/health -o /tmp/ndr-ci/health.json; then break; fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path("/tmp/ndr-ci/health.json").read_text())
+          print(json.dumps(payload, indent=2))
+          if payload.get("status") != "ok":
+              sys.exit("API health check failed")
+          if payload.get("database", {}).get("integrity") != "ok":
+              sys.exit("database integrity check failed")
+          print("model_loaded:", payload.get("model_loaded"))
+          PY
+
+  frontend:
+    name: Frontend type-check and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type-check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Build dashboard
+        working-directory: frontend
+        run: npm run build
+
+      - name: Upload dashboard bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: frontend/dist
+          retention-days: 7
+
+  docker:
+    name: Build container images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build serving image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.serving
+          push: false
+          tags: ndr-serving:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build sensor image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.sensor
+          push: false
+          tags: ndr-sensor:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

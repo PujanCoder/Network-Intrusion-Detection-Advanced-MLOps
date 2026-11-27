@@ -1,33 +1,38 @@
 stages:
   ml_pipeline:
     cmd: python -m src.pipelines.pipeline
-
     deps:
       - src/pipelines/pipeline.py
       - src/features/data_cleaning.py
       - src/features/data_preprocessing.py
       - src/features/feature_transformation.py
       - src/features/transformation_validation.py
+      - src/models/tracking.py
       - src/models/train_model.py
       - src/models/evaluate_model.py
       - data/raw/MachineLearningCSV/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv
-
     params:
+      - data
       - model
       - mlflow
-      - data
-
     outs:
       - data/processed/cleaned_dataset.csv
       - data/processed/transformed
       - models/best_model.joblib
-      - models/preprocessor.joblib        # NEW
-
+      - models/preprocessor.joblib
+      - reports/outlier_report.csv:
+          cache: false
+      - reports/data_drift_report.html:
+          cache: false
     metrics:
       - reports/training_results.json:
           cache: false
+      - reports/model_evaluation/evaluation_results.json:
+          cache: false
+      - reports/model_evaluation/model_comparison.csv:
+          cache: false
 
-  validate_preprocessor:                  # sibling of ml_pipeline — 2 spaces
+  validate_preprocessor:
     cmd: python -m src.serving.validate_artifacts
     deps:
       - models/best_model.joblib
@@ -36,6 +41,6 @@ stages:
     params:
       - model.path
       - model.preprocessor_path
-    outs:
+    metrics:
       - reports/serving_validation.json:
           cache: false

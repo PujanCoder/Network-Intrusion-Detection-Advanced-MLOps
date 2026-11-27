@@ -1,37 +1,73 @@
 name: cd
+
 on:
   push:
     branches: [main]
     paths:
-      - 'src/serving/**'
-      - 'src/sensor/**'
-      - 'src/features/**'
-      - 'models/**'
-      - 'params.yaml'
+      - "src/**"
+      - "models/**"
+      - "frontend/**"
+      - "deploy/**"
+      - "params.yaml"
+      - "dvc.yaml"
+      - "dvc.lock"
+      - "requirements.txt"
+      - ".github/workflows/cd.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build-and-push:
+  build:
+    name: Validate and build deployable images
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
-      - name: Install
-        run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
-      - name: Validate artifacts (fail fast)
-        run: python -m src.serving.validate_artifacts
+      - name: Validate DVC pipeline definition
+        run: |
+          python -m dvc stage list
+          python -m dvc dag
 
-      - name: Smoke test predictor
-        run: pytest tests/test_feature_contract.py -x
+      - name: Import smoke test
+        run: |
+          python -c "import src.api.app, src.api.routes, src.api.predictor"
+          python -c "import src.realtime.service, src.realtime.store, src.realtime.model"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build serving image
-        run: docker build -f deploy/Dockerfile.serving -t nids-serving:${{ github.sha }} .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.serving
+          push: false
+          tags: nids-serving:${{ github.sha }}
 
       - name: Build sensor image
-        run: docker build -f deploy/Dockerfile.sensor -t nids-sensor:${{ github.sha }} .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.sensor
+          push: false
+          tags: nids-sensor:${{ github.sha }}
 
-      # push steps depend on your registry (GHCR/ECR/...)
+      # Registry push is intentionally left to the operator; it needs
+      # credentials for GHCR/ECR that are not configured in this repository.

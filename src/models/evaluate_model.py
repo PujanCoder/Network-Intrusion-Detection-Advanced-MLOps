@@ -3,7 +3,6 @@ import logging
 import time
 from pathlib import Path
 
-import dagshub
 import mlflow
 import mlflow.sklearn
 import numpy as np
@@ -11,6 +10,8 @@ import pandas as pd
 import yaml
 
 from sklearn.model_selection import train_test_split
+
+from src.models.tracking import configure_tracking
 
 from sklearn.metrics import (
     accuracy_score,
@@ -61,11 +62,7 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 def initialize_mlflow():
 
-    dagshub.init(
-        repo_owner="pujanpandey012",
-        repo_name="Network-Intrusion-Detection-Advanced-MLOps",
-        mlflow=True,
-    )
+    configure_tracking()
 
     logger.info(
         "MLflow tracking URI: %s",

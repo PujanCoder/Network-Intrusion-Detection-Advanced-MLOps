@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="IDS_", extra="ignore")
 
-    api_key: str = "change-me"
+    api_key: str = ""
     model_path: Path = Path("models/cic_ids2017_xgb.joblib")
     feature_order_path: Path = Path("models/feature_order.json")
     db_path: Path = Path("data/ids.db")

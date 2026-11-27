@@ -2,7 +2,7 @@ data:
   X_train: data/processed/transformed/X_train_selected.csv
   X_test:  data/processed/transformed/X_test_selected.csv
   y_train: data/processed/transformed/y_train.csv
-  y_test:  data/processed/transformed/y_test.cs
+  y_test:  data/processed/transformed/y_test.csv
 model:
   # --- training hyperparameters ---
   random_state: 42

@@ -64,6 +64,16 @@ def remove_constant_features():
         DATA_DIR / "feature_selector.pkl"
     )
 
+    # Record the selected schema inside the preprocessor bundle so serving can
+    # select the model's input columns without re-fitting anything.
+    bundle_path = ROOT_DIR / "models" / "preprocessor.joblib"
+
+    if bundle_path.exists():
+        bundle = joblib.load(bundle_path)
+        bundle["model_features"] = list(selected_features)
+        bundle["removed_features"] = removed_features
+        joblib.dump(bundle, bundle_path)
+
     print("\nFINAL DATASET SHAPES")
     print("Training:", X_train_selected.shape)
     print("Testing:", X_test_selected.shape)

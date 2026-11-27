@@ -1,11 +1,11 @@
 {
-    "best_run_id": "82da9d8e916649f6bc3ccc48bf05f019",
-    "model_uri": "models:/m-705803329b994a55a460109b4adb6a68",
+    "best_run_id": "07c3396a8c82491f9d72a5ac354336f3",
+    "model_uri": "models:/m-8423e148f5ed40828c314251a6f26bdd",
     "validation_metrics": {
-        "accuracy": 1.0,
+        "accuracy": 0.9999719872261751,
         "precision": 1.0,
-        "recall": 1.0,
-        "f1_score": 1.0,
+        "recall": 0.9999511790265098,
+        "f1_score": 0.9999755889173685,
         "roc_auc": 1.0
     },
     "test_metrics": {
@@ -13,7 +13,7 @@
         "precision": 0.9999609375,
         "recall": 0.9998047180128105,
         "f1_score": 0.9998828216545582,
-        "roc_auc": 0.9999799409595577
+        "roc_auc": 0.9999799245311871
     },
     "classification_report": {
         "BENIGN": {

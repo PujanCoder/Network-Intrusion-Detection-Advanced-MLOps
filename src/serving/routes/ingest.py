@@ -1,3 +1,4 @@
+import hmac
 import logging
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -14,8 +15,10 @@ class FlowBatch(BaseModel):
 
 
 def _check_key(request: Request, key: str | None) -> None:
-    expected = getattr(request.app.state.settings, "api_key", None)
-    if expected and key != expected:
+    expected = getattr(request.app.state.settings, "api_key", "") or ""
+    if not expected:
+        raise HTTPException(status_code=503, detail="IDS_API_KEY is not configured")
+    if not hmac.compare_digest(key or "", expected):
         raise HTTPException(status_code=401, detail="bad api key")
 
 
