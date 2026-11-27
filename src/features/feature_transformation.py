@@ -114,11 +114,18 @@ def transform_features(X_train, X_test, y_train, y_test):
     )
 
     # Save fitted preprocessing pipeline
-    joblib.dump(
-        preprocessor,
-        OUTPUT_DIR / "preprocessor.pkl"
-    )
+    MODELS_DIR = ROOT_DIR / "models"
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
+    joblib.dump(
+        {
+            "preprocessor": preprocessor,
+            "feature_order": list(X_train.columns),                # input columns (fit-time)
+            "output_order": list(X_train_transformed.columns),     # columns model sees
+        },
+        MODELS_DIR / "preprocessor.joblib",
+    )
+    print("Preprocessor saved:", MODELS_DIR / "preprocessor.joblib")
     print("\nTRANSFORMATION COMPLETED")
     print("-" * 40)
     print("Training shape:", X_train_transformed.shape)

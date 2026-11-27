@@ -16,6 +16,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 
+
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -436,7 +437,6 @@ def main():
         y_train,
         y_test,
     )
-
 
 if __name__ == "__main__":
 

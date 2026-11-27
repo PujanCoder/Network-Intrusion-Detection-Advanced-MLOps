@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Real-time IDS</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:2rem;background:#0f172a;color:#e2e8f0}
+h1{margin:0 0 1rem}
+.cards{display:flex;gap:1rem;margin-bottom:1rem}
+.card{background:#1e293b;padding:1rem 1.5rem;border-radius:8px}
+.card .v{font-size:2rem;font-weight:700}
+.alerts{background:#1e293b;border-radius:8px;padding:1rem;max-height:60vh;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #334155}
+.attack{color:#f87171;font-weight:600}
+</style>
+</head>
+<body>
+<h1>Real-time IDS</h1>
+<div class="cards">
+  <div class="card"><div>Total</div><div class="v" id="total">0</div></div>
+  <div class="card"><div>Attacks</div><div class="v" id="attacks" style="color:#f87171">0</div></div>
+  <div class="card"><div>Status</div><div class="v" id="status">…</div></div>
+</div>
+<div class="alerts">
+<table>
+<thead><tr><th>Time</th><th>Src</th><th>Dst</th><th>Proto</th><th>Label</th><th>P(attack)</th></tr></thead>
+<tbody id="rows"></tbody>
+</table>
+</div>
+<script>
+let total=0, attacks=0;
+const rows=document.getElementById('rows');
+function addRow(d){
+  const f=d.flow||{}, p=d.prediction||{};
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td>${new Date().toLocaleTimeString()}</td>
+    <td>${f.src_ip??''}:${f.src_port??''}</td>
+    <td>${f.dst_ip??''}:${f.dst_port??''}</td>
+    <td>${f.protocol??''}</td>
+    <td class="${p.is_attack?'attack':''}">${p.label}</td>
+    <td>${(p.proba_attack??0).toFixed(3)}</td>`;
+  rows.prepend(tr);
+  while(rows.children.length>200) rows.removeChild(rows.lastChild);
+  total++; if(p.is_attack) attacks++;
+  document.getElementById('total').textContent=total;
+  document.getElementById('attacks').textContent=attacks;
+}
+async function init(){
+  const list=await (await fetch('/api/v1/detections?limit=100')).json();
+  list.reverse().forEach(d=>addRow({
+    flow:JSON.parse(d.flow_json),
+    prediction:{label:d.label,is_attack:!!d.is_attack,proba_attack:d.proba_attack}
+  }));
+  const ws=new WebSocket(`ws://${location.host}/ws/alerts`);
+  ws.onopen=()=>document.getElementById('status').textContent='live';
+  ws.onclose=()=>document.getElementById('status').textContent='offline';
+  ws.onmessage=e=>{try{addRow(JSON.parse(e.data))}catch{}};
+}
+init();
+</script>
+</body>
+</html>

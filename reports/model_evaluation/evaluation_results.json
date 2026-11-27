@@ -1,6 +1,6 @@
 {
-    "best_run_id": "79308f27877841f784ac0d8c3d49d665",
-    "model_uri": "models:/m-b460fc57c46d4d6a8fbbfb763e82d974",
+    "best_run_id": "82da9d8e916649f6bc3ccc48bf05f019",
+    "model_uri": "models:/m-705803329b994a55a460109b4adb6a68",
     "validation_metrics": {
         "accuracy": 1.0,
         "precision": 1.0,

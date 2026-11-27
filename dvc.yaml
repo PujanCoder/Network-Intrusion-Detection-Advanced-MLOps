@@ -21,7 +21,21 @@ stages:
       - data/processed/cleaned_dataset.csv
       - data/processed/transformed
       - models/best_model.joblib
+      - models/preprocessor.joblib        # NEW
 
     metrics:
       - reports/training_results.json:
+          cache: false
+
+  validate_preprocessor:                  # sibling of ml_pipeline — 2 spaces
+    cmd: python -m src.serving.validate_artifacts
+    deps:
+      - models/best_model.joblib
+      - models/preprocessor.joblib
+      - src/serving/validate_artifacts.py
+    params:
+      - model.path
+      - model.preprocessor_path
+    outs:
+      - reports/serving_validation.json:
           cache: false
