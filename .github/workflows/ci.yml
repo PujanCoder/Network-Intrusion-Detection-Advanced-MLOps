@@ -43,3 +43,36 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type-check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Build dashboard
+        working-directory: frontend
+        run: npm run build
+
+      - name: Upload dashboard bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: frontend/dist
+          retention-days: 7

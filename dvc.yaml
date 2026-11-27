@@ -25,3 +25,21 @@ stages:
     metrics:
       - reports/training_results.json:
           cache: false
+
+  model_training:
+    cmd: python -m src.models.train_model
+
+    deps:
+      - src/models/train_model.py
+      - data/processed/transformed
+
+    params:
+      - model
+      - mlflow
+
+    outs:
+      - models/best_model.joblib
+
+    metrics:
+      - reports/model_evaluation/evaluation_results.json:
+          cache: false
