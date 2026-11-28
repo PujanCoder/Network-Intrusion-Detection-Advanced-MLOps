@@ -11,8 +11,10 @@ class Settings(BaseSettings):
     # The platform secret is called NDR_API_KEY; this app historically used
     # IDS_API_KEY. Accepting both lets one Render secret configure both apps.
     api_key: str = Field(default="", validation_alias=AliasChoices("IDS_API_KEY", "NDR_API_KEY"))
-    model_path: Path = Path("models/cic_ids2017_xgb.joblib")
-    feature_order_path: Path = Path("models/feature_order.json")
+    # Declared for operators who set IDS_MODEL_PATH; src.serving.predictor owns the
+    # actual resolution (repository-root relative, env overridable).
+    model_path: Path = Path("models/best_model.joblib")
+    preprocessor_path: Path = Path("models/preprocessor.joblib")
     db_path: Path = Path("data/ids.db")
 
     # Zeek ingestion (Phase 2+)

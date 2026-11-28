@@ -102,6 +102,27 @@ def health_payload(state: Any) -> dict[str, Any]:
         )
     else:
         payload["model"] = None
+
+    payload["models"] = {
+        "cicids": {
+            "loaded": bool(cicids["loaded"]),
+            "version": cicids.get("version"),
+            "estimator": cicids.get("estimator"),
+            "features": cicids.get("features"),
+            "loaded_at": cicids.get("loaded_at"),
+            "error": cicids.get("error"),
+            "artifact": cicids.get("artifacts", {}).get("model"),
+        },
+        "zeek": {
+            "loaded": bool(zeek["loaded"]),
+            "version": zeek.get("version"),
+            "schema_version": zeek.get("schema_version"),
+            "features": zeek.get("features"),
+            "loaded_at": zeek.get("loaded_at"),
+            "error": zeek.get("error"),
+            "artifact": zeek.get("path"),
+        },
+    }
     return payload
 
 

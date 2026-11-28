@@ -5,12 +5,19 @@
 #
 # The API key is generated once by Render and injected as NDR_API_KEY. The app
 # also accepts IDS_API_KEY; the dashboard asks for the key via /?api_key=...
+#
+# The build step materialises the DVC-tracked CICIDS artefacts. Render only
+# clones git, and models/*.joblib are DVC outputs kept out of git by
+# .gitignore, so without this step the deployed service runs Zeek-only and
+# reports cicids_model.loaded = false. scripts/fetch_models.py is non-fatal:
+# if the artefacts cannot be fetched the build still succeeds and the service
+# starts in degraded mode instead of crash-looping.
 services:
   - type: web
     name: nids-serving
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python scripts/fetch_models.py
     startCommand: uvicorn src.serving.app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
     healthCheckPath: /api/v1/health
     autoDeploy: true
@@ -21,3 +28,17 @@ services:
         value: "3.13.15"
       - key: IDS_ZEEK_ENABLED
         value: "false"
+      # Credentials for the DagsHub DVC remote, set in the Render dashboard.
+      # DAGSHUB_USER_TOKEN is the token from https://dagshub.com/user/settings/tokens;
+      # DAGSHUB_USERNAME is the DagsHub account that owns the repository, used for
+      # basic auth against the .s3 endpoint. Alternatively provide the repo's
+      # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the DagsHub settings page.
+      - key: DAGSHUB_USER_TOKEN
+        sync: false
+      - key: DAGSHUB_USERNAME
+        sync: false
+      # Fallback when DVC is not reachable: a tar.gz/zip containing models/.
+      - key: MODEL_ARTIFACTS_URL
+        sync: false
+      - key: MODEL_ARTIFACTS_TOKEN
+        sync: false

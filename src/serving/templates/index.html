@@ -91,17 +91,23 @@ function showBanner(html) {
   el.innerHTML = html;
 }
 
+function shortTime(value) {
+  if (!value) return 'not initialised';
+  const parsed = new Date(value);
+  return isNaN(parsed) ? String(value) : parsed.toLocaleString();
+}
+
 function renderModel(health) {
   const el = document.getElementById('modelStatus');
   if (!health) { el.innerHTML = '<span class="warn">unknown</span>'; return; }
   const zeek = health.components.zeek_model;
   const cicids = health.components.cicids_model;
   const zeekLine = zeek.loaded
-    ? `<span class="ok">Zeek: loaded</span><div class="small mono">${esc(zeek.features)} feats · ${esc(zeek.schema_version)}</div>`
+    ? `<span class="ok">Zeek: loaded</span><div class="small mono">${esc(zeek.features)} feats · ${esc(zeek.schema_version)} · v${esc(zeek.version || 'unversioned')}<br>init ${esc(shortTime(zeek.loaded_at))}</div>`
     : `<span class="bad">Zeek: not loaded</span><div class="small mono">${esc(zeek.error || 'unknown error')}</div>`;
   const cicidsLine = cicids.loaded
-    ? '<span class="ok">CICIDS: loaded</span>'
-    : `<span class="warn">CICIDS: unavailable</span><div class="small mono">${esc(cicids.error || 'artefacts absent')}</div>`;
+    ? `<span class="ok">CICIDS: loaded</span><div class="small mono">${esc(cicids.features)} feats · ${esc(cicids.estimator || 'estimator')} · v${esc(cicids.version || 'unversioned')}<br>init ${esc(shortTime(cicids.loaded_at))}</div>`
+    : `<span class="warn">CICIDS: unavailable</span><div class="small mono">${esc(cicids.error || 'artefacts absent')}<br>${esc(cicids.remediation || 'python scripts/fetch_models.py')}</div>`;
   el.innerHTML = zeekLine + `<div class="small" style="margin-top:4px"></div>` + cicidsLine;
 }
 

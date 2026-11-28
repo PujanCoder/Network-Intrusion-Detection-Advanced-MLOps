@@ -9,9 +9,11 @@ committed artefact was trained with, so nothing could ever be scored.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -71,6 +73,19 @@ class ZeekConnPredictor:
         self.classes = [str(c) for c in getattr(self.model, "classes_", bundle.get("classes", []))]
         self.threshold = bundle.get("threshold")
         self.metadata = bundle.get("metadata") or {}
+        self.version = str(
+            bundle.get("model_version")
+            or self.metadata.get("version")
+            or self._derived_version()
+        )
+        self.loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def _derived_version(self) -> str:
+        digest = hashlib.sha256()
+        with self.path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()[:12]}"
 
     def predict_from_envelope(self, event: Mapping[str, Any]) -> dict[str, Any]:
         normalized = event.get("normalized") or {}
@@ -183,6 +198,8 @@ def zeek_model_state() -> dict[str, Any]:
         "features": len(predictor.feature_names) if predictor else len(FEATURE_ORDER),
         "classes": predictor.classes if predictor else None,
         "threshold": predictor.threshold if predictor else None,
+        "version": predictor.version if predictor else None,
+        "loaded_at": predictor.loaded_at if predictor else None,
     }
 
 

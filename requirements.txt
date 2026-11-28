@@ -16,7 +16,7 @@ mlflow
 dagshub==0.7.3
 
 # Data and pipeline versioning
-dvc==3.66.1
+dvc[s3]==3.66.1
 
 # Backend API and monitoring
 Flask==3.1.2

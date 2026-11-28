@@ -67,6 +67,11 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
 - `.gitignore` has a Python-oriented `lib/` rule. `frontend/src/lib/` (the dashboard's shared
   API/types/format modules) is force-tracked at the bottom of `.gitignore`; if those modules
   ever go missing from a checkout, check that rule first.
+- The delivered serving app is `src.serving` (`render.serving.yaml`), not `src.api`:
+  Render only clones git, so its CICIDS artefacts must be fetched during the build with
+  `python scripts/fetch_models.py` (DVC + `DAGSHUB_USER_TOKEN`, or `MODEL_ARTIFACTS_URL`).
+  The script is non-fatal by design; `--strict` fails a build instead. `dvc push` in
+  `.github/workflows/publish-artifacts.yml` is what puts the artefacts in the remote.
 - Batch artefacts are DVC-tracked (DagsHub HTTP remote). `tests/test_feature_contract.py`
   skips when `models/best_model.joblib` / `models/preprocessor.joblib` are absent; set
   `NDR_REQUIRE_ARTIFACTS=1` to turn that into a failure. Run `dvc pull` first.

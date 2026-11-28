@@ -21,7 +21,7 @@ The live service is a **Web Service → Python 3** (native runtime, not Docker):
 
 | Setting | Value |
 | --- | --- |
-| Build command | `pip install -r requirements.txt` |
+| Build command | `pip install -r requirements.txt && python scripts/fetch_models.py` |
 | Start command | `uvicorn src.serving.app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'` |
 | Health check path | `/api/v1/health` |
 
@@ -33,19 +33,61 @@ Environment variables:
 | `IDS_DB_PATH` | recommended | SQLite file, e.g. `/var/data/ids.db` (needs a Render disk mounted at `/var/data`, otherwise the database resets on every deploy). |
 | `IDS_ZEEK_LOG_DIR` | no | Directory the in-process tailer watches. Defaults to `data/interim/zeek/current`, which does not exist in a container — harmless, the watcher simply finds nothing. |
 | `IDS_ZEEK_ENABLED` | no | `true` only when Zeek writes logs into the container. Leave unset for push-based ingestion. |
-| `IDS_MODEL_PATH`, `IDS_PREPROCESSOR_PATH` | no | Where the CICIDS artefacts live if you ship them (see below). |
+| `IDS_MODEL_PATH`, `IDS_PREPROCESSOR_PATH` | no | Override where the CICIDS artefacts are looked up. Defaults are repository-root relative (`models/best_model.joblib`, `models/preprocessor.joblib`). |
+| `DAGSHUB_USER_TOKEN` | build only | Token from <https://dagshub.com/user/settings/tokens>. Lets the build pull the DVC artefacts. |
+| `DAGSHUB_USERNAME` | build only | DagsHub owner of the repository; used for basic auth against the `.s3` endpoint. Inferred from `.dvc/config` when unset. |
+| `MODEL_ARTIFACTS_URL` | build only | Fallback: `https://` (or `file://`) tar.gz/zip containing `models/`. |
+| `MODEL_ARTIFACTS_TOKEN` | build only | Bearer token for `MODEL_ARTIFACTS_URL`, if it needs one. |
 
-Optional, to enable the CICIDS baseline on Render instead of only Zeek scoring:
+## Why the CICIDS model is missing after a deploy
 
-```sh
-# build command
-pip install -r requirements.txt && dvc pull models/best_model.joblib models/preprocessor.joblib
+`models/best_model.joblib` and `models/preprocessor.joblib` are **DVC outputs** and
+`.gitignore` keeps every `*.joblib` out of git except the Zeek model. Render only
+clones git, so a build without an explicit fetch step produces a service where
+`/api/v1/health` reports:
+
+```json
+{"components": {"cicids_model": {"loaded": false, "error": ".../models/best_model.joblib (batch model not found); run `python scripts/fetch_models.py`"}}}
 ```
 
-with a `DAGSHUB_USER_TOKEN` secret available at build time. If the pull is
-skipped the app still starts: `/api/v1/health` reports
-`components.cicids_model.loaded = false` and `/api/v1/ingest/cic` answers `503`
-with `code = "cicids_model_unavailable"`. Zeek inference does not depend on it.
+`python scripts/fetch_models.py` runs during the build and fixes that. It tries,
+in order:
+
+1. the file is already present and non-empty (no-op);
+2. `dvc pull models/best_model.joblib models/preprocessor.joblib -r origin`
+   using credentials from the environment — `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
+   when set, otherwise `DAGSHUB_USER_TOKEN` (+ `DAGSHUB_USERNAME`) via DVC basic auth.
+   Credentials are written to `.dvc/config.local` for the duration of the pull and
+   removed afterwards; they are never committed and never printed (output is redacted);
+3. `MODEL_ARTIFACTS_URL`, a tar.gz/zip containing `models/`, with an optional
+   `MODEL_ARTIFACTS_TOKEN` bearer token.
+
+The script exits 0 even when nothing could be fetched: the service starts in
+degraded mode (`cicids_model.loaded = false`, `/api/v1/ingest/cic` answers `503`
+with `code = "cicids_model_unavailable"`, Zeek scoring unaffected). Use
+`python scripts/fetch_models.py --check` to inspect and `--strict` to turn a
+missing artefact into a build failure.
+
+### The artefacts must exist in the remote first
+
+The fetch step can only download what was pushed. `dvc push` is a separate,
+manual act:
+
+```sh
+python -m src.pipelines.pipeline        # or: dvc repro
+dvc push models/best_model.joblib models/preprocessor.joblib
+```
+
+or run the `publish-artifacts` workflow (Actions → publish-artifacts → Run
+workflow), which pulls the raw capture, retrains and pushes.
+
+Verify from a clean clone before redeploying:
+
+```sh
+git clone <repo> /tmp/ndr-check && cd /tmp/ndr-check
+DAGSHUB_USER_TOKEN=... python scripts/fetch_models.py --strict
+ls -l models/best_model.joblib models/preprocessor.joblib
+```
 
 ## Opening the dashboard
 
@@ -104,7 +146,8 @@ and are only present when they exist in the build context.
 | data calls return `401` / `code=invalid_api_key` | key configured, wrong or missing header | open the dashboard as `/?api_key=...` |
 | "Zeek Status: blocked" on the dashboard | the page has no key yet | open `/?api_key=...` once |
 | `components.zeek_model.loaded = false` | `models/zeek/zeek_model.joblib` missing or a schema mismatch | keep the tracked artefact, or fix `IDS_ZEEK_MODEL_PATH`; the error text says which |
-| `components.cicids_model.loaded = false` | DVC artefact not shipped | optional: run `dvc pull` during the build |
+| `components.cicids_model.loaded = false` | the DVC artefact was not fetched (never pushed, or no credentials at build time) | run `publish-artifacts` (or `dvc push`) to publish it, set `DAGSHUB_USER_TOKEN` on Render, redeploy; `python scripts/fetch_models.py --check` shows what the build sees |
+| `/api/v1/health` reports `cicids_model.error` mentioning `not found` but the file exists | `IDS_MODEL_PATH` points somewhere else | check the resolved path in `components.cicids_model.model_path` |
 | Zeek Events stays 0 | nothing is being pushed and no log directory exists | use `/api/v1/zeek/ingest/records` or enable the tailer |
 | Scored Detections stays 0 while events grow | every pushed event is a non-`conn` log, or the model failed to load | check the detection rows: `reason` explains it |
 | data disappears after a deploy | SQLite lives on the ephemeral filesystem | mount a Render disk and set `IDS_DB_PATH=/var/data/ids.db` |
