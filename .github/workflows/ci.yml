@@ -109,49 +109,68 @@ jobs:
 
       - name: Serving app smoke test
         env:
-          IDS_DB_PATH: /tmp/nids-ci/ids.db
-          IDS_API_KEY: ci-serving-key
           IDS_ZEEK_LOG_DIR: /tmp/nids-ci/zeek
         run: |
           mkdir -p /tmp/nids-ci/zeek
-          python -m uvicorn src.serving.app:app --host 127.0.0.1 --port 8098 --log-level warning &
-          server_pid=$!
-          trap 'kill $server_pid' EXIT
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8098/api/v1/health -o /tmp/nids-ci/health.json; then break; fi
-            sleep 1
-          done
+          # Two instances: one with a key (the healthy shape), one without (the
+          # misconfigured shape that reached production and returned 503 everywhere).
+          IDS_API_KEY=ci-serving-key IDS_DB_PATH=/tmp/nids-ci/ids.db \
+            python -m uvicorn src.serving.app:app --host 127.0.0.1 --port 8098 --log-level warning &
+          keyed_pid=$!
+          IDS_API_KEY= IDS_DB_PATH=/tmp/nids-ci/nokey.db \
+            python -m uvicorn src.serving.app:app --host 127.0.0.1 --port 8097 --log-level warning &
+          nokey_pid=$!
+          trap 'kill $keyed_pid $nokey_pid' EXIT
           python - <<'PY'
           import json
-          import pathlib
           import sys
+          import time
           import urllib.error
           import urllib.request
 
-          payload = json.loads(pathlib.Path("/tmp/nids-ci/health.json").read_text())
-          print(json.dumps(payload, indent=2))
-          if payload["components"]["zeek_model"]["loaded"] is not True:
-              sys.exit("Zeek model must load from the tracked artefact")
-          if payload["components"]["auth"]["configured"] is not True:
-              sys.exit("IDS_API_KEY must be picked up")
-          if "cicids_model" in payload["degraded_components"]:
-              print("note: CICIDS artefacts absent in CI (expected without dvc pull)")
+          KEYED = "http://127.0.0.1:8098"
+          NOKEY = "http://127.0.0.1:8097"
 
-          def status(path, key=None):
-              req = urllib.request.Request(f"http://127.0.0.1:8098{path}")
+          def call(base, path, key=None, payload=None):
+              request = urllib.request.Request(base + path)
               if key:
-                  req.add_header("X-API-Key", key)
+                  request.add_header("X-API-Key", key)
+              if payload is not None:
+                  request.data = json.dumps(payload).encode()
+                  request.add_header("Content-Type", "application/json")
+                  request.method = "POST"
               try:
-                  with urllib.request.urlopen(req) as response:
+                  with urllib.request.urlopen(request) as response:
                       return response.status, json.load(response)
               except urllib.error.HTTPError as error:
                   return error.code, json.load(error)
 
-          code, body = status("/api/v1/zeek/status")
-          if code != 503 or body["detail"]["code"] != "auth_not_configured":
-              sys.exit(f"unauthenticated status call must fail closed, got {code} {body}")
+          for base in (KEYED, NOKEY):
+              for _ in range(30):
+                  try:
+                      if call(base, "/api/v1/health")[0] == 200:
+                          break
+                  except Exception:
+                      pass
+                  time.sleep(1)
+              else:
+                  sys.exit(f"{base} never became healthy")
 
-          code, _ = status("/api/v1/zeek/status", "bad-key")
+          code, health = call(KEYED, "/api/v1/health")
+          print(json.dumps(health, indent=2))
+          if code != 200:
+              sys.exit(f"health must be public, got {code}")
+          if health["components"]["zeek_model"]["loaded"] is not True:
+              sys.exit("Zeek model must load from the tracked artefact")
+          if health["components"]["auth"] != {"configured": True, "source": "IDS_API_KEY"}:
+              sys.exit(f"IDS_API_KEY not picked up: {health['components']['auth']}")
+          if "cicids_model" in health["degraded_components"]:
+              print("note: CICIDS artefacts absent in CI (expected without dvc pull)")
+
+          code, body = call(KEYED, "/api/v1/zeek/status")
+          if code != 401 or body["detail"]["code"] != "invalid_api_key":
+              sys.exit(f"missing key must be rejected, got {code} {body}")
+          code, body = call(KEYED, "/api/v1/zeek/status", "bad-key")
           if code != 401:
               sys.exit(f"wrong key must be rejected, got {code}")
 
@@ -159,17 +178,19 @@ jobs:
                     "id.resp_h": "10.0.0.9", "id.resp_p": 23, "proto": "tcp", "service": "-",
                     "duration": 0.0, "orig_bytes": 0, "resp_bytes": 0, "conn_state": "S0",
                     "orig_pkts": 1, "resp_pkts": 0, "orig_ip_bytes": 60, "resp_ip_bytes": 0}
-          request = urllib.request.Request(
-              "http://127.0.0.1:8098/api/v1/zeek/ingest/records",
-              data=json.dumps({"records": [record]}).encode(),
-              headers={"Content-Type": "application/json", "X-API-Key": "ci-serving-key"},
-              method="POST",
-          )
-          with urllib.request.urlopen(request) as response:
-              pushed = json.load(response)
+          code, pushed = call(KEYED, "/api/v1/zeek/ingest/records", "ci-serving-key", {"records": [record]})
           print("ingest:", pushed)
-          if pushed["scored"] != 1:
+          if code != 200 or pushed["scored"] != 1:
               sys.exit("a conn record must be scored by the Zeek model in CI")
+
+          # No key at all: the app must stay observable and the write path closed.
+          code, health = call(NOKEY, "/api/v1/health")
+          if code != 200 or health["components"]["auth"]["configured"] is not False:
+              sys.exit(f"health must stay public and report the missing key, got {code}")
+          code, body = call(NOKEY, "/api/v1/zeek/status")
+          if code != 503 or body["detail"]["code"] != "auth_not_configured":
+              sys.exit(f"unconfigured deployment must fail closed with a reason, got {code} {body}")
+          print("serving smoke test passed")
           PY
 
   frontend:
