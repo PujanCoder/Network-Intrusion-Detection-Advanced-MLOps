@@ -1,0 +1,38 @@
+# Production image for the serving app that runs at
+# https://network-intrusion-detection-advanced.onrender.com
+# (FastAPI + Zeek ingestion + CICIDS baseline + separate Zeek model).
+#
+# Build:  docker build -f deploy/Dockerfile.nids -t nids-serving .
+# Run:    docker run -p 8000:8000 -e PORT=8000 -e NDR_API_KEY=... nids-serving
+#
+# The CICIDS batch artefacts (models/best_model.joblib, models/preprocessor.joblib)
+# are DVC-tracked and therefore NOT in this context. The app starts without them
+# and reports it on /api/v1/health; mount or COPY them in a derived image if you
+# need the CICIDS endpoints. The Zeek model is git-tracked and shipped here.
+
+FROM python:3.13-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    IDS_DB_PATH=/app/data/ids.db \
+    IDS_ZEEK_LOG_DIR=/app/data/zeek
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+COPY src ./src
+COPY models ./models
+
+RUN mkdir -p /app/data/zeek
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+    CMD python -c "import os,urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.getenv('PORT','8000')}/api/v1/health\", timeout=4)"
+
+# Render (and most PaaS) inject PORT; TLS terminates in front of the container,
+# so uvicorn must trust the proxy headers.
+CMD ["sh", "-c", "exec uvicorn src.serving.app:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

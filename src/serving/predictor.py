@@ -63,20 +63,76 @@ class Predictor:
 
 # ---- module singleton ----
 _predictor: Predictor | None = None
+_predictor_error: str | None = None
+_predictor_attempted = False
+
+
+class PredictorUnavailable(RuntimeError):
+    """Raised when the CICIDS artefacts are missing or unusable."""
+
+
+def _paths() -> tuple[str, str]:
+    return (
+        os.getenv("IDS_MODEL_PATH", str(ROOT / "models" / "best_model.joblib")),
+        os.getenv("IDS_PREPROCESSOR_PATH", str(ROOT / "models" / "preprocessor.joblib")),
+    )
+
+
+def load_predictor() -> tuple[Predictor | None, str | None]:
+    """Load once; return the predictor and the recorded failure reason, if any.
+
+    The batch artefacts are DVC-tracked and therefore absent from a plain git
+    deployment. That must not crash the process: the Zeek path keeps working and
+    the failure is reported by ``/api/v1/health`` and ``/api/v1/ready``.
+    """
+
+    global _predictor, _predictor_error, _predictor_attempted
+    if _predictor is not None:
+        return _predictor, None
+    if _predictor_attempted:
+        return None, _predictor_error
+    _predictor_attempted = True
+    model_path, preprocessor_path = _paths()
+    try:
+        _predictor = Predictor(model_path=model_path, preprocessor_path=preprocessor_path)
+        _predictor_error = None
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal
+        _predictor_error = f"{type(exc).__name__}: {exc}"
+        log.error(
+            "CICIDS predictor unavailable (model=%s preprocessor=%s): %s",
+            model_path,
+            preprocessor_path,
+            _predictor_error,
+        )
+    return _predictor, _predictor_error
 
 
 def get_predictor() -> Predictor:
-    global _predictor
-    if _predictor is None:
-        _predictor = Predictor(
-            model_path=os.getenv(
-                "IDS_MODEL_PATH", str(ROOT / "models" / "best_model.joblib")
-            ),
-            preprocessor_path=os.getenv(
-                "IDS_PREPROCESSOR_PATH", str(ROOT / "models" / "preprocessor.joblib")
-            ),
-        )
-    return _predictor
+    predictor, error = load_predictor()
+    if predictor is None:
+        raise PredictorUnavailable(error or "predictor could not be loaded")
+    return predictor
+
+
+def predictor_state() -> dict[str, object]:
+    model_path, preprocessor_path = _paths()
+    return {
+        "loaded": _predictor is not None,
+        "model_path": model_path,
+        "preprocessor_path": preprocessor_path,
+        "model_exists": Path(model_path).exists(),
+        "preprocessor_exists": Path(preprocessor_path).exists(),
+        "error": _predictor_error,
+    }
+
+
+def reset_predictor() -> None:
+    """Drop the cached state (tests and after deploying new artefacts)."""
+
+    global _predictor, _predictor_error, _predictor_attempted
+    _predictor = None
+    _predictor_error = None
+    _predictor_attempted = False
 
 
 def predict_flow(flow: dict) -> dict:

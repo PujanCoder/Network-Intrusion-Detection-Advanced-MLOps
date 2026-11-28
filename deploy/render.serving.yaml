@@ -1,0 +1,23 @@
+# Render blueprint for the NIDS serving app (src.serving : /api/v1 + HTML dashboard).
+# Apply with: Render dashboard -> New -> Blueprint -> this file
+# (Blueprint path: deploy/render.serving.yaml).
+# The platform service (src.api + React dashboard) is described by render.yaml.
+#
+# The API key is generated once by Render and injected as NDR_API_KEY. The app
+# also accepts IDS_API_KEY; the dashboard asks for the key via /?api_key=...
+services:
+  - type: web
+    name: nids-serving
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.serving.app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      - key: NDR_API_KEY
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.13.15"
+      - key: IDS_ZEEK_ENABLED
+        value: "false"

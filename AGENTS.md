@@ -36,6 +36,11 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
 
 - `render.yaml` is the single hosted-service definition (Docker, health check
   `/api/health`, disk at `/var/data`). `docs/DEPLOY_RENDER.md` is the operator guide.
+- The service at `network-intrusion-detection-advanced.onrender.com` runs the **older**
+  `src.serving` app (HTML dashboard, `/api/v1/*`), not `src.api`. It is documented in
+  `docs/DEPLOY_SERVING.md` with the blueprint `deploy/render.serving.yaml`. Both apps accept
+  `NDR_API_KEY` or `IDS_API_KEY`; data endpoints fail closed (`503 auth_not_configured` /
+  `401 invalid_api_key`) and `/api/v1/health` is public on purpose.
 - The hosted service sets `NDR_INGEST_ENABLED=false` (no Zeek in the container) and relies on
   `POST /api/ingest/zeek`, which **fails closed (503) unless `NDR_API_KEY` is set**. Sensors push
   with `scripts/zeek_forward.py`, which keeps a byte offset so restarts do not re-send.

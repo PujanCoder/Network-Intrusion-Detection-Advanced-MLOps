@@ -24,8 +24,9 @@ CICIDS2017 intrusion-detection ML pipeline, which is still in the repository and
 | FastAPI REST + WebSocket API | Implemented, tested, executed |
 | React dashboard, 6 pages, live updates | Built, executed in a browser |
 | Authenticated remote ingestion (`POST /api/ingest/zeek`) | Implemented, tested |
-| Hosted deployment (Render, Docker, `$PORT`, persistent disk) | Configured (`render.yaml`), see [`docs/DEPLOY_RENDER.md`](docs/DEPLOY_RENDER.md) |
-| 85 automated tests | Passing |
+| Hosted deployment — platform service (Render, Docker, `$PORT`, persistent disk) | Configured (`render.yaml`), see [`docs/DEPLOY_RENDER.md`](docs/DEPLOY_RENDER.md) |
+| Hosted deployment — serving dashboard (`src.serving`, `/api/v1`) | Verified in a container (`deploy/Dockerfile.nids`), see [`docs/DEPLOY_SERVING.md`](docs/DEPLOY_SERVING.md) |
+| 108 automated tests | Passing |
 | Batch CICIDS2017 pipeline (MLflow/DagsHub/DVC) | Preserved |
 | Live Zeek capture on a real interface | **Not verified here** (no Zeek in this container) |
 
@@ -225,6 +226,25 @@ python scripts/zeek_forward.py --url https://<service>.onrender.com \
     --log /opt/zeek/logs/current/conn.log --follow
 ```
 
+### The serving dashboard (`src.serving`, `/api/v1`)
+
+The service at `https://network-intrusion-detection-advanced.onrender.com` runs the
+older `src.serving` app (HTML dashboard at `/`, `POST /api/v1/zeek/ingest/records`
+for push ingestion). Its Render settings, environment variables, key handling and
+troubleshooting table are in [`docs/DEPLOY_SERVING.md`](docs/DEPLOY_SERVING.md);
+the matching blueprint is `deploy/render.serving.yaml`.
+
+```bash
+curl -X POST "$BASE/api/v1/zeek/ingest/records" \
+  -H "X-API-Key: $NDR_API_KEY" -H "Content-Type: application/json" \
+  -d '{"records": [<raw Zeek conn.log JSON object>]}'
+```
+
+Both apps accept `NDR_API_KEY` **or** `IDS_API_KEY`, so one Render secret
+configures both. Data endpoints fail closed: `503 auth_not_configured` when no
+key is set, `401 invalid_api_key` on a mismatch, and `/api/v1/health` is public
+so a misconfigured deployment is diagnosable instead of opaque.
+
 ---
 
 ## Repository layout
@@ -240,7 +260,7 @@ models/             zeek/ live model, best_model.joblib batch model
 reports/            evaluation reports, threshold sweep, model card
 scripts/            run_api.sh, zeek_live.sh, replay_zeek_holdout.py, zeek_forward.py
 tests/              85 tests (parser, features, store, reader, detectors, API)
-docs/               PROJECT_ARCHITECTURE.md, DEPLOY_RENDER.md
+docs/               PROJECT_ARCHITECTURE.md, DEPLOY_RENDER.md, DEPLOY_SERVING.md
 render.yaml         Render Blueprint (web service + persistent disk)
 ```
 
