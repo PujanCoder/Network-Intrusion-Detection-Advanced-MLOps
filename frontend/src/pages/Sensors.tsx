@@ -1,201 +1,118 @@
-import { EmptyState, KeyValue, Panel, Pill, StatCard } from "../components/ui";
-import type { SensorsInfo } from "../lib/api";
-import { getJson } from "../lib/api";
-import { useLive } from "../lib/LiveContext";
-import { formatBytes, formatDateTime, formatNumber, relativeSeconds } from "../lib/format";
+import { ErrorBox, KeyValue, Loading, Panel, Pill, StatCard } from "../components/ui";
+import { api } from "../lib/api";
+import { formatDateTime, formatNumber, relativeFrom } from "../lib/format";
 import { usePolled } from "../lib/usePolled";
 
+const tone = (status: string) => (status === "online" ? "ok" : status === "offline" ? "bad" : "warn") as "ok" | "bad" | "warn";
+
 export function SensorsPage() {
-  const live = useLive();
-  const sensors = usePolled<SensorsInfo>(() => getJson<SensorsInfo>("/api/sensors"), 3000);
-  const data = sensors.data;
+  const { data, error, loading } = usePolled(() => api.sensors(), 5000, []);
 
-  if (sensors.loading && !data) return <div className="loading">Reading sensor state…</div>;
-  if (sensors.error && !data) return <div className="error-box">{sensors.error}</div>;
-  if (!data) return <EmptyState title="Sensor state unavailable" />;
-
-  const sensor = data.sensor;
-  const reader = sensor?.reader;
-  const capturing = (reader?.log_file_count ?? 0) > 0 && (reader?.log_dir_exists ?? false);
-  const replayRecords = Number(sensor?.counters?.replay_records ?? 0);
-  const replayMode = sensor?.sensor_mode === "replay" || replayRecords > 0;
+  if (loading && !data) return <Loading label="Loading sensors" />;
 
   return (
     <>
-      <div className="grid cols-4">
-        <StatCard
-          label="Zeek capture"
-          value={capturing ? "receiving" : "idle"}
-          foot={`${reader?.log_file_count ?? 0} log files · ${reader?.rotations ?? 0} rotations`}
-          accent={capturing ? "green" : "amber"}
-          small
-        />
-        <StatCard
-          label="Ingestion"
-          value={sensor?.ingestion_running ? "running" : "stopped"}
-          foot={`poll ${sensor?.poll_interval_s ?? "—"}s · mode ${sensor?.sensor_mode ?? "—"}`}
-          accent={sensor?.ingestion_running ? "green" : "red"}
-          small
-        />
-        <StatCard
-          label="Database"
-          value={data.database.integrity === "ok" ? "healthy" : "check"}
-          foot={`${formatBytes(data.database.size_bytes)} · ${formatNumber(data.database.events)} events`}
-          accent={data.database.integrity === "ok" ? "green" : "red"}
-          small
-        />
-        <StatCard
-          label="WebSocket clients"
-          value={formatNumber(data.websocket.clients)}
-          foot={`${formatNumber(data.websocket.dropped_messages)} dropped · ${formatNumber(data.websocket.rejected_clients)} rejected`}
-          accent="violet"
-          small
-        />
-      </div>
-
-      {replayMode && (
-        <div className="banner">
-          <strong>Replay data detected.</strong>
-          <span>
-            {formatNumber(replayRecords)} records carry the replay marker, so this traffic comes from the
-            held-out replay harness, not from a live capture interface.
-          </span>
-        </div>
-      )}
-
-      <div className="grid cols-3">
-        <Panel title="Zeek sensor" hint="log reader">
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-            <Pill text={capturing ? "logs present" : "no logs"} tone={capturing ? "ok" : "warn"} />
-            <Pill text={sensor?.sensor_mode ?? "unknown"} tone={sensor?.sensor_mode === "live" && !replayRecords ? "ok" : "warn"} />
-            {replayRecords > 0 && <Pill text={`${formatNumber(replayRecords)} replay records`} tone="warn" />}
-            <Pill text={sensor?.ingest_enabled ? "ingest enabled" : "ingest disabled"} tone={sensor?.ingest_enabled ? "info" : "bad"} />
+      <ErrorBox error={error} />
+      {data && (
+        <>
+          <div className="stat-grid">
+            <StatCard label="Sensors seen" value={formatNumber(data.summary.total)} foot="rows in ingestion status" />
+            <StatCard label="Online" value={formatNumber(data.summary.online)} accent="green" foot={`event within ${data.stale_after_s}s`} />
+            <StatCard label="Offline" value={formatNumber(data.summary.offline)} accent="red" foot="silent beyond threshold" />
+            <StatCard label="Events stored" value={formatNumber(data.summary.events)} accent="violet" foot="zeek_events rows" />
+            <StatCard label="Dead letters" value={formatNumber(data.summary.dead_letters)} accent="amber" foot="records that failed to parse" />
+            <StatCard label="Sensor mode" value={data.expected.mode} accent="cyan" foot={`expected id ${data.expected.sensor_id}`} />
           </div>
-          <KeyValue
-            rows={[
-              ["Sensor ID", <span className="mono">{sensor?.sensor_id ?? "—"}</span>],
-              ["Log directory", <span className="mono">{reader?.log_dir ?? "—"}</span>],
-              ["Directory exists", <span className="mono">{String(reader?.log_dir_exists ?? false)}</span>],
-              ["Tracked files", <span className="mono">{formatNumber(reader?.files_tracked ?? 0)}</span>],
-              ["Rotations handled", <span className="mono">{formatNumber(reader?.rotations ?? 0)}</span>],
-              ["Truncations handled", <span className="mono">{formatNumber(reader?.truncations ?? 0)}</span>],
-              ["Unparsed lines", <span className="mono">{formatNumber(reader?.unparsed_lines ?? 0)}</span>],
-              ["Last event", <span className="mono">{formatDateTime(sensor?.last_event_at)}</span>],
-              ["Since last event", <span className="mono">{relativeSeconds(sensor?.seconds_since_event)}</span>],
-              ["Last error", <span className="mono">{sensor?.last_error ?? "none"}</span>],
-            ]}
-          />
-        </Panel>
 
-        <Panel title="Processing pipeline" hint="counters since start">
-          <KeyBar counters={sensor?.counters ?? {}} />
-          <div style={{ marginTop: 14 }}>
-            <KeyValue
-              rows={[
-                [
-                  "Event → DB delay",
-                  <span className="mono">
-                    {data.processing_delay.avg_delay_s !== null ? `${(data.processing_delay.avg_delay_s * 1000).toFixed(1)} ms avg` : "—"}{" "}
-                    {data.processing_delay.max_delay_s !== null ? `· ${(data.processing_delay.max_delay_s * 1000).toFixed(0)} ms max` : ""}
-                  </span>,
-                ],
-                ["Delay samples", <span className="mono">{formatNumber(data.processing_delay.samples)}</span>],
-                ["Dead letters", <span className="mono">{formatNumber(data.dead_letters)}</span>],
-                ["Last poll", <span className="mono">{formatDateTime(sensor?.last_poll_at)}</span>],
-              ]}
-            />
-          </div>
-        </Panel>
-
-        <Panel title="Platform services" hint="API · database · model">
-          <KeyValue
-            rows={[
-              ["API status", <span className="mono" style={{ color: "var(--green)" }}>{data.api.status}</span>],
-              ["API version", <span className="mono">{data.api.version}</span>],
-              ["API uptime", <span className="mono">{relativeSeconds(data.api.uptime_s)}</span>],
-              ["Database path", <span className="mono">{data.database.path}</span>],
-              ["Journal mode", <span className="mono">{data.database.journal_mode}</span>],
-              ["Integrity check", <span className="mono">{data.database.integrity}</span>],
-              ["Events stored", <span className="mono">{formatNumber(data.database.events)}</span>],
-              [
-                "Model",
-                <span className="mono" style={{ color: data.model.loaded ? "var(--green)" : "var(--red)" }}>
-                  {data.model.loaded ? `${data.model.name} ${data.model.version}` : data.model.load_error ?? "not loaded"}
-                </span>,
-              ],
-              ["WS connected", <span className="mono">{String(live.connected)}</span>],
-              ["Server time", <span className="mono">{formatDateTime(data.server_time)}</span>],
-            ]}
-          />
-        </Panel>
-      </div>
-
-      <Panel title="Incremental log ingestion" hint="byte offsets persisted in SQLite">
-        {data.ingestion_state.length ? (
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Log file</th>
-                  <th>Offset</th>
-                  <th>Size</th>
-                  <th>Updated</th>
-                  <th>Idle</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.ingestion_state.map((row) => (
-                  <tr key={row.source_file}>
-                    <td className="mono">{row.source_file}</td>
-                    <td className="mono">{formatNumber(row.offset)}</td>
-                    <td className="mono">{formatNumber(row.size)}</td>
-                    <td className="mono">{formatDateTime(row.updated_at)}</td>
-                    <td className="mono muted">{relativeSeconds(row.seconds_since_update)}</td>
-                  </tr>
+          <Panel title="Registered sensors" hint="online means an event arrived recently — not that a row exists">
+            {data.sensors.length === 0 ? (
+              <div className="empty">
+                <strong>No sensor has ever pushed an event</strong>
+                <div>
+                  Point a Zeek sensor at <span className="mono">POST /api/v1/zeek/ingest/records</span> with the API key, or
+                  enable local ingestion with <span className="mono">IDS_ZEEK_ENABLED=true</span>.
+                </div>
+              </div>
+            ) : (
+              <div className="card-grid">
+                {data.sensors.map((sensor) => (
+                  <article key={sensor.sensor_id} className="sensor-card">
+                    <header>
+                      <div>
+                        <div className="mono sensor-name">{sensor.sensor_id}</div>
+                        <div className="muted tiny">{sensor.status_reason}</div>
+                      </div>
+                      <Pill text={sensor.status} tone={tone(sensor.status)} pulse={sensor.status === "online"} />
+                    </header>
+                    <dl className="sensor-metrics">
+                      <div>
+                        <dt>Events</dt>
+                        <dd>{formatNumber(sensor.events)}</dd>
+                      </div>
+                      <div>
+                        <dt>Scored</dt>
+                        <dd>{formatNumber(sensor.scored)}</dd>
+                      </div>
+                      <div>
+                        <dt>Unclassified</dt>
+                        <dd>{formatNumber(sensor.unclassified)}</dd>
+                      </div>
+                      <div>
+                        <dt>Attacks</dt>
+                        <dd className={sensor.attacks > 0 ? "pred-attack" : ""}>{formatNumber(sensor.attacks)}</dd>
+                      </div>
+                      <div>
+                        <dt>Duplicates</dt>
+                        <dd>{formatNumber(sensor.duplicates)}</dd>
+                      </div>
+                      <div>
+                        <dt>Dead letters</dt>
+                        <dd>{formatNumber(sensor.dead_letters)}</dd>
+                      </div>
+                    </dl>
+                    <KeyValue
+                      rows={[
+                        ["Last event received", formatDateTime(sensor.last_ingested_at)],
+                        ["Since last event", relativeFrom(sensor.last_ingested_at)],
+                        ["Last Zeek ts", formatDateTime(sensor.last_seen_ts)],
+                        ["Last error", sensor.last_error ?? "none"],
+                      ]}
+                    />
+                  </article>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <EmptyState
-            title="No log offsets recorded yet."
-            detail="Offsets appear after the reader processes its first Zeek record."
-          />
-        )}
-      </Panel>
+              </div>
+            )}
+          </Panel>
 
-      <Panel title="Behavioural detectors" hint="rules evaluated on every flow">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {(sensor?.detectors.rules ?? []).map((rule) => (
-            <span key={rule} className="tag">{rule}</span>
-          ))}
-        </div>
-      </Panel>
+          <div className="grid-2">
+            <Panel title="Expected configuration" hint="from this deployment's environment">
+              <KeyValue
+                rows={[
+                  ["Sensor id", <span className="mono">{data.expected.sensor_id}</span>],
+                  ["Mode", data.expected.mode],
+                  ["Local ingestion", data.expected.local_ingestion_enabled ? "enabled" : "disabled (remote sensors push)"],
+                  ["Zeek log dir", <span className="mono">{data.expected.log_dir}</span>],
+                  ["Log types", <span className="mono">{data.expected.log_types.join(", ")}</span>],
+                  ["Stale threshold", `${data.stale_after_s} s`],
+                ]}
+              />
+            </Panel>
+            <Panel title="Ingestion service" hint="tailer and reader state reported by the app">
+              <pre className="json">{JSON.stringify(data.ingestion, null, 2)}</pre>
+            </Panel>
+          </div>
+
+          <Panel title="Log types ingested" hint="zeek_events grouped by log type">
+            <KeyValue
+              rows={
+                Object.keys(data.counters.by_log_type).length
+                  ? Object.entries(data.counters.by_log_type).map(([type, count]) => [type, formatNumber(count)] as [string, string])
+                  : [["—", "no events stored"]]
+              }
+            />
+          </Panel>
+        </>
+      )}
     </>
-  );
-}
-
-function KeyBar({ counters }: { counters: Record<string, number> }) {
-  const entries = Object.entries(counters).filter(([, value]) => typeof value === "number");
-  if (!entries.length) return <EmptyState title="No counters yet" />;
-  return (
-    <div className="grid cols-2" style={{ gap: 8 }}>
-      {entries.map(([key, value]) => (
-        <div
-          key={key}
-          style={{
-            border: "1px solid var(--line)",
-            borderRadius: 8,
-            padding: "9px 11px",
-            background: "rgba(8,14,26,0.6)",
-          }}
-        >
-          <div className="dim" style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-            {key.replaceAll("_", " ")}
-          </div>
-          <div className="mono" style={{ fontSize: 16, marginTop: 3 }}>{formatNumber(value)}</div>
-        </div>
-      ))}
-    </div>
   );
 }

@@ -1,42 +1,11 @@
-from pathlib import Path
+"""Compatibility router.
 
-from fastapi import APIRouter, Header, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+The dashboard page itself is mounted by :mod:`src.serving.app` (React bundle when
+present, built-in status page otherwise). Data endpoints live in
+:mod:`src.serving.routes.soc`; ``/ws/alerts`` moved there when it gained session
+authentication.
+"""
 
-from src.serving.security import require_key
+from fastapi import APIRouter
 
 router = APIRouter()
-
-
-@router.get("/")
-def index():
-    p = Path(__file__).resolve().parents[1] / "templates" / "index.html"
-    return FileResponse(p)
-
-
-@router.get("/api/v1/detections")
-def list_detections(
-    request: Request,
-    limit: int = 100,
-    only_attacks: bool = False,
-    x_api_key: str | None = Header(default=None),
-):
-    """Detection history. Same key as every other data endpoint: the rows carry
-    internal addresses and classifications, so the endpoint fails closed."""
-
-    require_key(request.app.state.settings, x_api_key)
-    return request.app.state.store.recent(limit=limit, only_attacks=only_attacks)
-
-
-@router.websocket("/ws/alerts")
-async def ws_alerts(ws: WebSocket):
-    await ws.accept()
-    hub = ws.app.state.hub
-    await hub.register(ws)
-    try:
-        while True:
-            await ws.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        await hub.unregister(ws)

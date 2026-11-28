@@ -1,22 +1,30 @@
 import type { ReactNode } from "react";
 
+import type { Severity, Source } from "../lib/api";
+import { severityTone } from "../lib/format";
+
 export function Panel({
   title,
   hint,
   children,
   className = "",
+  actions,
 }: {
   title?: string;
   hint?: ReactNode;
   children: ReactNode;
   className?: string;
+  actions?: ReactNode;
 }) {
   return (
     <section className={`panel ${className}`}>
-      {(title || hint) && (
+      {(title || hint || actions) && (
         <div className="panel-head">
-          {title && <div className="panel-title">{title}</div>}
-          {hint && <div className="panel-hint">{hint}</div>}
+          <div>
+            {title && <div className="panel-title">{title}</div>}
+            {hint && <div className="panel-hint">{hint}</div>}
+          </div>
+          {actions && <div className="panel-actions">{actions}</div>}
         </div>
       )}
       {children}
@@ -55,24 +63,35 @@ export function EmptyState({ title, detail }: { title: string; detail?: ReactNod
   );
 }
 
-export function Chip({ text, className }: { text: string; className: string }) {
-  return <span className={`chip ${className}`}>{text}</span>;
-}
-
 export function Pill({
   text,
   tone = "info",
   pulse = false,
+  title,
 }: {
   text: string;
   tone?: "ok" | "warn" | "bad" | "info" | "neutral";
   pulse?: boolean;
+  title?: string;
 }) {
   const cls = tone === "neutral" ? "pill" : `pill ${tone}`;
   return (
-    <span className={cls}>
+    <span className={cls} title={title}>
       <span className={`dot ${pulse ? "pulse" : ""}`} />
       {text}
+    </span>
+  );
+}
+
+export function SeverityBadge({ severity }: { severity: Severity | string }) {
+  return <span className={`badge ${severityTone(severity)}`}>{severity}</span>;
+}
+
+export function SourceBadge({ source, experimental }: { source: Source; experimental?: boolean }) {
+  return (
+    <span className={`badge src-${source}`} title={experimental ? "experimental model" : "validated model"}>
+      {source}
+      {experimental ? " · exp" : ""}
     </span>
   );
 }
@@ -104,10 +123,7 @@ export function BarList({
           <div>
             <div className="mono">{item.label}</div>
             <div className="bar-track">
-              <div
-                className="bar-fill"
-                style={{ width: `${Math.max(3, (item.value / max) * 100)}%`, background: color }}
-              />
+              <div className="bar-fill" style={{ width: `${Math.max(3, (item.value / max) * 100)}%`, background: color }} />
             </div>
           </div>
           <div className="mono muted">{item.value.toLocaleString()}</div>
@@ -127,5 +143,14 @@ export function KeyValue({ rows }: { rows: [string, ReactNode][] }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+export function NoEventsNotice({ message = "No new network events received." }: { message?: string }) {
+  return (
+    <div className="notice">
+      <span className="dot warn" />
+      {message}
+    </div>
   );
 }

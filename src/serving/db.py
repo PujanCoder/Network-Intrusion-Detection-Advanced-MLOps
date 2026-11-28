@@ -29,9 +29,9 @@ class DetectionStore:
         c.execute("PRAGMA journal_mode=WAL")
         return c
 
-    def insert(self, flow: dict, pred: dict):
+    def insert(self, flow: dict, pred: dict) -> int:
         with self._lock, self._conn() as c:
-            c.execute(
+            cursor = c.execute(
                 "INSERT INTO detections (ts, src_ip, dst_ip, src_port, dst_port, proto, "
                 "label, is_attack, confidence, proba_attack, flow_json) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -45,6 +45,7 @@ class DetectionStore:
                     json.dumps(flow, default=str),
                 ),
             )
+            return int(cursor.lastrowid or 0)
 
     def recent(self, limit: int = 100, only_attacks: bool = False) -> list[dict]:
         q = "SELECT * FROM detections"

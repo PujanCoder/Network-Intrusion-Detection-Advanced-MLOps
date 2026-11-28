@@ -1,145 +1,150 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-import { EventDrawer } from "../components/EventDrawer";
-import { Chip, EmptyState, Panel, StatCard } from "../components/ui";
-import type { NetworkEvent } from "../lib/api";
-import { getJson } from "../lib/api";
-import { useLive } from "../lib/LiveContext";
-import { formatDateTime, formatNumber, severityClass } from "../lib/format";
+import { DistributionBarChart } from "../components/Charts";
+import { DetectionDrawer } from "../components/EventDrawer";
+import { DetectionTable } from "../components/EventTable";
+import { ErrorBox, Loading, Panel, SeverityBadge, StatCard } from "../components/ui";
+import { api, type Severity } from "../lib/api";
+import { formatNumber } from "../lib/format";
 import { usePolled } from "../lib/usePolled";
 
-interface AttackResponse {
-  items: NetworkEvent[];
-  total: number;
-}
-
-const SEVERITIES = ["", "CRITICAL", "HIGH", "MEDIUM", "LOW"];
+const SEVERITIES: Severity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
 
 export function AttacksPage() {
-  const live = useLive();
-  const [severity, setSeverity] = useState("");
-  const [selected, setSelected] = useState<NetworkEvent | null>(null);
+  const [severity, setSeverity] = useState<Severity | "">("");
+  const [source, setSource] = useState<"zeek" | "cicids" | "">("");
+  const [label, setLabel] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
 
-  const attacks = usePolled<AttackResponse>(
-    () => getJson<AttackResponse>(`/api/attacks?limit=100${severity ? `&severity=${severity}` : ""}`),
+  const overview = usePolled(() => api.overview(86400), 5000, []);
+  const page = usePolled(
+    () =>
+      api.detections({
+        only_attacks: true,
+        limit: 100,
+        severity: severity || null,
+        source: source || null,
+        label: label || null,
+      }),
     5000,
-    [severity],
+    [severity, source, label],
   );
 
-  const items = attacks.data?.items ?? [];
-  const overview = live.overview;
-  const critical = items.filter((item) => (item.severity || "").toUpperCase() === "CRITICAL").length;
-  const high = items.filter((item) => (item.severity || "").toUpperCase() === "HIGH").length;
-
-  const open = async (event: NetworkEvent) => {
-    setSelected(event);
-    try {
-      const full = await getJson<NetworkEvent>(`/api/events/${event.id}`);
-      setSelected(full);
-    } catch {
-      /* keep the list row if the detail call fails */
-    }
-  };
+  const labels = useMemo(
+    () => (overview.data?.distributions.labels ?? []).filter((item) => item.label !== "BENIGN"),
+    [overview.data],
+  );
+  const severityCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const item of overview.data?.distributions.severities ?? []) map.set(item.label, item.count);
+    return map;
+  }, [overview.data]);
 
   return (
     <>
-      <div className="grid cols-4">
-        <StatCard label="Detected attacks" value={formatNumber(overview?.attacks)} accent="red" />
-        <StatCard label="Critical in view" value={formatNumber(critical)} accent="red" />
-        <StatCard label="High in view" value={formatNumber(high)} accent="orange" />
-        <StatCard label="Suspicious events" value={formatNumber(overview?.suspicious)} accent="amber" />
+      <ErrorBox error={page.error ?? overview.error} />
+
+      <div className="stat-grid">
+        <StatCard label="Attacks (24h)" value={formatNumber(page.data?.total ?? 0)} accent="red" foot="is_attack = true, all pages" />
+        <StatCard label="Critical" value={formatNumber(severityCounts.get("CRITICAL") ?? 0)} accent="red" foot="confidence ≥ 0.90" />
+        <StatCard label="High" value={formatNumber(severityCounts.get("HIGH") ?? 0)} accent="orange" foot="confidence ≥ 0.75" />
+        <StatCard label="Medium" value={formatNumber(severityCounts.get("MEDIUM") ?? 0)} accent="amber" foot="confidence ≥ 0.50" />
+        <StatCard label="Low" value={formatNumber(severityCounts.get("LOW") ?? 0)} accent="violet" foot="confidence < 0.50" />
+        <StatCard
+          label="Rows shown"
+          value={formatNumber(page.data?.items.length ?? 0)}
+          accent="cyan"
+          foot="filtered page"
+        />
+      </div>
+
+      <Panel title="Severity bands" hint="rule applied to model confidence, not model output">
+        <div className="severity-strip">
+          {SEVERITIES.map((band) => (
+            <button
+              key={band}
+              type="button"
+              className={`severity-cell ${severity === band ? "active" : ""}`}
+              onClick={() => setSeverity(severity === band ? "" : band)}
+            >
+              <SeverityBadge severity={band} />
+              <span className="mono">{formatNumber(severityCounts.get(band) ?? 0)}</span>
+            </button>
+          ))}
+        </div>
+        <p className="small muted">{overview.data?.severity_policy.description}</p>
+      </Panel>
+
+      <div className="toolbar">
+        <div className="toolbar-group">
+          <span className="toolbar-label">model</span>
+          {[
+            { label: "all", value: "" },
+            { label: "zeek", value: "zeek" },
+            { label: "cicids", value: "cicids" },
+          ].map((option) => (
+            <button
+              key={option.value || "all"}
+              type="button"
+              className={`chip-button ${source === option.value ? "active" : ""}`}
+              onClick={() => setSource(option.value as "zeek" | "cicids" | "")}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <div className="toolbar-group">
+          <span className="toolbar-label">label</span>
+          <select value={label} onChange={(event) => setLabel(event.target.value)} className="control">
+            <option value="">all attack labels</option>
+            {labels.map((item) => (
+              <option key={item.label} value={item.label}>
+                {item.label} ({item.count})
+              </option>
+            ))}
+          </select>
+          {(severity || source || label) && (
+            <button
+              type="button"
+              className="chip-button"
+              onClick={() => {
+                setSeverity("");
+                setSource("");
+                setLabel("");
+              }}
+            >
+              reset
+            </button>
+          )}
+        </div>
       </div>
 
       <Panel
-        title="Attack timeline"
-        hint={`${attacks.data?.total ?? 0} attacks persisted · newest first`}
+        title="Detected attacks"
+        hint="click a row for the full record, evidence and class probabilities"
+        className="flush"
       >
-        <div className="controls" style={{ marginBottom: 12 }}>
-          <div className="field">
-            <label>Severity</label>
-            <select className="select" value={severity} onChange={(event) => setSeverity(event.target.value)}>
-              {SEVERITIES.map((value) => (
-                <option key={value || "all"} value={value}>
-                  {value || "All severities"}
-                </option>
-              ))}
-            </select>
-          </div>
-          <span className="mono dim" style={{ marginLeft: "auto" }}>
-            Click a row for evidence and the original Zeek record.
-          </span>
-        </div>
-
-        {attacks.error && <div className="error-box">{attacks.error}</div>}
-
-        {items.length ? (
-          <div className="table-wrap" style={{ maxHeight: 620 }}>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Detected</th>
-                  <th>Category</th>
-                  <th>Source</th>
-                  <th>Destination</th>
-                  <th>Proto</th>
-                  <th>Prediction</th>
-                  <th>Confidence</th>
-                  <th>Severity</th>
-                  <th>Evidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((event) => (
-                  <tr key={event.id} className="row-attack" onClick={() => open(event)}>
-                    <td className="mono">{formatDateTime(event.ts)}</td>
-                    <td>
-                      <span className="tag">{event.prediction ?? "rule"}</span>
-                    </td>
-                    <td className="mono">
-                      {event.src_ip ?? "—"}:{event.src_port ?? "—"}
-                    </td>
-                    <td className="mono">
-                      {event.dst_ip ?? "—"}:{event.dst_port ?? "—"}
-                    </td>
-                    <td className="mono muted">{event.proto ?? "—"}</td>
-                    <td>
-                      <Chip text={event.prediction ?? "unclassified"} className={event.is_malicious ? "pred-attack" : "pred-unclassified"} />
-                    </td>
-                    <td className="mono">{event.confidence !== null ? `${(event.confidence * 100).toFixed(1)}%` : "—"}</td>
-                    <td>
-                      <Chip text={event.severity ?? "info"} className={severityClass(event.severity)} />
-                    </td>
-                    <td className="truncate muted" title={event.explanation ?? ""}>
-                      {event.alerts && event.alerts.length
-                        ? event.alerts.map((alert) => alert.rule).join(", ")
-                        : event.explanation ?? "model decision"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {page.loading && !page.data ? (
+          <Loading label="Loading attacks" />
         ) : (
-          <EmptyState
-            title="No attacks detected yet."
-            detail="The attack view fills only from real detections. Nothing is simulated."
+          <DetectionTable
+            rows={page.data?.items ?? []}
+            onOpen={setOpenId}
+            emptyTitle="No attacks match these filters"
+            emptyDetail="Attacks appear when a model labels a record as malicious."
           />
         )}
       </Panel>
 
-      <Panel title="Detection categories" hint="rule engine + model classes">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {["PortScan", "BruteForce", "DoS", "DDoS", "Exfiltration", "DnsTunneling", "Recon", "WebAttack", "Backdoor", "Exploit", "Worm", "Other"].map(
-            (category) => (
-              <span key={category} className="tag">
-                {category}
-              </span>
-            ),
-          )}
-        </div>
+      <Panel title="Attack distribution" hint="labels across stored detections (24h)">
+        <DistributionBarChart
+          data={(overview.data?.distributions.labels ?? []).filter((item) => item.label !== "BENIGN")}
+          color="#ff5b6e"
+          emptyLabel="No attack labels yet"
+        />
       </Panel>
 
-      <EventDrawer event={selected} onClose={() => setSelected(null)} />
+      <DetectionDrawer id={openId} onClose={() => setOpenId(null)} />
     </>
   );
 }

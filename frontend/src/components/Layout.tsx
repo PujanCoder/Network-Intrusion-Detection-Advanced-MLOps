@@ -1,28 +1,33 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
+import { useAuth } from "../lib/auth";
 import { useLive } from "../lib/LiveContext";
 import { relativeSeconds } from "../lib/format";
 import { Pill } from "./ui";
 
 const NAV = [
-  { to: "/", label: "Overview", icon: "shield" },
-  { to: "/stream", label: "Live stream", icon: "activity" },
-  { to: "/analytics", label: "Traffic analytics", icon: "chart" },
-  { to: "/attacks", label: "Attack monitoring", icon: "target" },
-  { to: "/model", label: "Model monitoring", icon: "cpu" },
-  { to: "/explorer", label: "Event explorer", icon: "search" },
-  { to: "/sensors", label: "Sensor health", icon: "antenna" },
+  { to: "/", label: "Security overview", icon: "shield" },
+  { to: "/live", label: "Live monitoring", icon: "activity" },
+  { to: "/threats", label: "Threat detection", icon: "target" },
+  { to: "/investigate", label: "Investigation", icon: "search" },
+  { to: "/sensors", label: "Network sensors", icon: "antenna" },
+  { to: "/models", label: "Model monitoring", icon: "cpu" },
+  { to: "/system", label: "System health", icon: "pulse" },
 ] as const;
 
+const SECONDARY = [{ to: "/analytics", label: "Traffic analytics", icon: "chart" }] as const;
+
 const TITLES: Record<string, { title: string; subtitle: string }> = {
-  "/": { title: "Live security overview", subtitle: "Sensor · detection · model status" },
-  "/stream": { title: "Live prediction stream", subtitle: "Every record processed by the pipeline" },
-  "/analytics": { title: "Real-time traffic analytics", subtitle: "Volume, distribution and top talkers" },
-  "/attacks": { title: "Attack monitoring", subtitle: "Detections with supporting evidence" },
-  "/model": { title: "Model monitoring", subtitle: "Live Zeek classifier vs CICIDS2017 batch model" },
-  "/explorer": { title: "Network event explorer", subtitle: "Search, filter, inspect and export" },
-  "/sensors": { title: "Sensor monitoring", subtitle: "Zeek, ingestion, database, API and WebSocket" },
+  "/": { title: "Security overview", subtitle: "Platform-wide detection posture, from stored events only" },
+  "/live": { title: "Live network monitoring", subtitle: "Records as Zeek ingests them, with model output" },
+  "/threats": { title: "Threat detection", subtitle: "Attack records with severity, model and evidence" },
+  "/investigate": { title: "Detection investigation", subtitle: "Search, inspect, paginate and export stored detections" },
+  "/sensors": { title: "Network sensors", subtitle: "Liveness from ingestion timestamps, not row existence" },
+  "/models": { title: "Model monitoring", subtitle: "CICIDS2017 classifier and experimental Zeek model" },
+  "/system": { title: "System health", subtitle: "Components, database, WebSocket and deployed build" },
+  "/analytics": { title: "Traffic analytics", subtitle: "Volume, distribution and top talkers from the database" },
 };
 
 function Icon({ name }: { name: string }) {
@@ -86,6 +91,12 @@ function Icon({ name }: { name: string }) {
           <path d="M7.5 4.5a7 7 0 0 0 0 9.9M16.5 4.5a7 7 0 0 1 0 9.9" />
         </svg>
       );
+    case "pulse":
+      return (
+        <svg {...common}>
+          <path d="M2 12h4l2-6 3 12 2.5-6H22" />
+        </svg>
+      );
     default:
       return null;
   }
@@ -93,15 +104,18 @@ function Icon({ name }: { name: string }) {
 
 export function Layout({ children }: { children: ReactNode }) {
   const live = useLive();
+  const auth = useAuth();
   const location = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
   const meta = TITLES[location.pathname] ?? TITLES["/"];
-  const replayRecords = live.overview?.sensor?.replay_records ?? 0;
-  const sensorMode = replayRecords > 0 ? "replay" : live.sensor?.mode ?? "unknown";
-  const modelLoaded = live.model?.loaded ?? false;
-  const lastEvent = live.overview?.seconds_since_last_event;
+  const overview = live.hello;
+  const cicids = overview?.models?.cicids;
+  const zeek = overview?.models?.zeek;
+  const commit = overview?.app?.build?.commit?.slice(0, 7) ?? "—";
+  const sensorOnline = (overview?.sensors?.online ?? 0) > 0;
 
   return (
-    <div className="shell">
+    <div className={`shell ${menuOpen ? "menu-open" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
@@ -112,17 +126,36 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
           <div>
             <div className="brand-title">NDR SENTINEL</div>
-            <div className="brand-sub">network defence</div>
+            <div className="brand-sub">security operations</div>
           </div>
+          <button type="button" className="menu-button" onClick={() => setMenuOpen((open) => !open)} aria-label="Menu">
+            ☰
+          </button>
         </div>
 
-        <div className="nav-label">Monitoring</div>
+        <div className="nav-label">Operate</div>
         <nav className="nav">
           {NAV.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === "/"}
+              onClick={() => setMenuOpen(false)}
+              className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
+            >
+              <Icon name={item.icon} />
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="nav-label">Analyse</div>
+        <nav className="nav">
+          {SECONDARY.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              onClick={() => setMenuOpen(false)}
               className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
             >
               <Icon name={item.icon} />
@@ -133,29 +166,40 @@ export function Layout({ children }: { children: ReactNode }) {
 
         <div className="sidebar-footer">
           <div className="row">
-            <span>WS</span>
-            <span style={{ color: live.connected ? "var(--green)" : "var(--red)" }}>
-              {live.connected ? "connected" : "offline"}
+            <span>alerts ws</span>
+            <span style={{ color: live.connected ? "var(--green)" : "var(--amber)" }}>
+              {live.connected ? "streaming" : "reconnecting"}
             </span>
           </div>
           <div className="row">
-            <span>sensor</span>
-            <span>{live.sensor?.sensor_id ?? "—"}</span>
-          </div>
-          <div className="row">
-            <span>mode</span>
-            <span>{sensorMode}</span>
-          </div>
-          <div className="row">
-            <span>model</span>
-            <span style={{ color: modelLoaded ? "var(--green)" : "var(--amber)" }}>
-              {modelLoaded ? "loaded" : "unavailable"}
+            <span>sensors</span>
+            <span>
+              {overview ? `${overview.sensors.online}/${overview.sensors.total} online` : "—"}
             </span>
+          </div>
+          <div className="row">
+            <span>cicids</span>
+            <span style={{ color: cicids?.loaded ? "var(--green)" : "var(--red)" }}>
+              {cicids?.loaded ? "loaded" : "unavailable"}
+            </span>
+          </div>
+          <div className="row">
+            <span>zeek model</span>
+            <span style={{ color: zeek?.loaded ? "var(--amber)" : "var(--red)" }}>
+              {zeek?.loaded ? "loaded · exp" : "unavailable"}
+            </span>
+          </div>
+          <div className="row">
+            <span>build</span>
+            <span className="mono">{commit}</span>
           </div>
           <div className="row">
             <span>last event</span>
-            <span>{relativeSeconds(lastEvent)}</span>
+            <span>{relativeSeconds(overview?.activity?.seconds_since_event ?? null)}</span>
           </div>
+          <button type="button" className="sign-out" onClick={() => void auth.signOut()}>
+            Sign out
+          </button>
         </div>
       </aside>
 
@@ -168,12 +212,24 @@ export function Layout({ children }: { children: ReactNode }) {
           <div className="topbar-spacer" />
           <div className="status-cluster">
             <Pill
-              text={live.connected ? "live" : "reconnecting"}
-              tone={live.connected ? "ok" : "bad"}
+              text={live.connected ? "live stream" : "stream offline"}
+              tone={live.connected ? "ok" : "warn"}
               pulse={live.connected}
             />
-            <Pill text={`sensor ${sensorMode}`} tone={sensorMode === "live" ? "ok" : "warn"} />
-            <Pill text={`model ${modelLoaded ? "online" : "offline"}`} tone={modelLoaded ? "info" : "bad"} />
+            <Pill
+              text={sensorOnline ? "sensor online" : "sensor silent"}
+              tone={sensorOnline ? "ok" : "warn"}
+              title={overview?.sensors.items?.[0]?.status_reason}
+            />
+            <Pill
+              text={`cicids ${cicids?.loaded ? "ready" : "down"}`}
+              tone={cicids?.loaded ? "info" : "bad"}
+            />
+            <Pill
+              text={`zeek ${zeek?.loaded ? "exp" : "down"}`}
+              tone={zeek?.loaded ? "warn" : "bad"}
+              title="Zeek model trained on synthetic records; experimental"
+            />
           </div>
         </header>
         <main className="content">{children}</main>

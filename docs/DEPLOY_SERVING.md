@@ -1,186 +1,120 @@
-# Deploying the NIDS serving app (the live dashboard)
+# Deploying the NDR platform (one service, one URL)
 
-This documents the service that runs at
-`https://network-intrusion-detection-advanced.onrender.com` — the FastAPI app in
-`src/serving`, which serves the HTML dashboard, the Zeek ingestion pipeline and
-the CICIDS batch scoring endpoint.
+The production service runs `src.serving.app`: a single FastAPI application that
+serves the React SOC dashboard, the authenticated metrics/detection/sensor APIs,
+CICIDS flow scoring, Zeek ingestion + scoring, the alert WebSocket and the health
+endpoints. There is no second web server and no second deployment.
 
-There are **two** back-ends in this repository and they are not interchangeable:
+```
+Browser ──HTTPS──> FastAPI (src.serving.app)
+                     ├── /              React bundle (frontend/dist, committed)
+                     ├── /api/v1/*      metrics, detections, sensors, models, system
+                     ├── /api/v1/session login / logout (HttpOnly cookie)
+                     ├── /api/v1/zeek/* ingestion + scoring (X-API-Key)
+                     ├── /api/v1/ingest/cic CICIDS flow scoring (X-API-Key)
+                     ├── /ws/alerts     authenticated alert stream
+                     └── SQLite         zeek_events, zeek_detections, detections
+```
 
-| Module | Purpose | Routes | Frontend |
-| --- | --- | --- | --- |
-| `src.serving.app` | The deployed NIDS dashboard (serving + Zeek) | `/api/v1/*`, `/` | server-rendered `src/serving/templates/index.html` |
-| `src.api.app` | The newer real-time platform | `/api/*`, `/api/ws` | `frontend/dist` (React) |
-
-`render.yaml` at the repository root describes the *platform* service. The
-serving app described here has its own blueprint: `deploy/render.serving.yaml`.
+`src.api.app` remains in the repository as the local/dev variant of the same idea.
+It is no longer what the hosted service runs, and the dashboard no longer talks to
+it: the bundle in `frontend/dist` is built against `/api/v1/*`.
 
 ## Render configuration
 
-The live service is a **Web Service → Python 3** (native runtime, not Docker):
+The live service (`network-intrusion-detection-advanced.onrender.com`) is a
+**Web Service → Python** (native runtime, not Docker):
 
 | Setting | Value |
 | --- | --- |
+| Branch | `feature/realtime-ndr-platform` — Render tracks this branch, **not** `main` |
 | Build command | `pip install -r requirements.txt && python scripts/fetch_models.py && python scripts/verify_artifacts.py` |
 | Start command | `uvicorn src.serving.app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'` |
-| Health check path | `/api/v1/health` |
+| Health check | `/api/v1/health` |
+
+Because the build command cannot install Node, the dashboard bundle is **committed**
+(`frontend/dist`, see `.gitignore`). Any frontend change must ship with a rebuilt
+bundle:
+
+```bash
+cd frontend && npm ci && npm run build && git add -A dist && git commit
+```
+
+The build is deterministic (same sources → same hashed filenames), so an unchanged
+bundle produces no diff.
 
 Environment variables:
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `NDR_API_KEY` **or** `IDS_API_KEY` | **yes** | API key for every data endpoint. Both names are accepted; set one. |
-| `IDS_DB_PATH` | recommended | SQLite file, e.g. `/var/data/ids.db` (needs a Render disk mounted at `/var/data`, otherwise the database resets on every deploy). |
-| `IDS_ZEEK_LOG_DIR` | no | Directory the in-process tailer watches. Defaults to `data/interim/zeek/current`, which does not exist in a container — harmless, the watcher simply finds nothing. |
-| `IDS_ZEEK_ENABLED` | no | `true` only when Zeek writes logs into the container. Leave unset for push-based ingestion. |
-| `IDS_MODEL_PATH`, `IDS_PREPROCESSOR_PATH` | no | Override where the CICIDS artefacts are looked up. Defaults are repository-root relative (`models/best_model.joblib`, `models/preprocessor.joblib`). |
-| `DAGSHUB_USER_TOKEN` | build only | Token from <https://dagshub.com/user/settings/tokens>. Lets the build pull the DVC artefacts. |
-| `DAGSHUB_USERNAME` | build only | DagsHub owner of the repository, used as the basic-auth user for the HTTPS DVC remote (`…/<repo>.dvc`). Inferred from `.dvc/config` when unset. |
-| `MODEL_ARTIFACTS_URL` | build only | Fallback: `https://` (or `file://`) tar.gz/zip containing `models/`. |
-| `MODEL_ARTIFACTS_TOKEN` | build only | Bearer token for `MODEL_ARTIFACTS_URL`, if it needs one. |
+| `NDR_API_KEY` **or** `IDS_API_KEY` | **yes** | The only secret. Authenticates `X-API-Key` clients and underwrites the dashboard session tokens. |
+| `IDS_DB_PATH` | recommended | SQLite file, e.g. `/var/data/ids.db`. Without a Render disk the file resets on every deploy. |
+| `NDR_SESSION_SECRET` | no | Signing key for session cookies. Derived from the API key when unset (so rotating the key logs everyone out). |
+| `IDS_SESSION_TTL_S` | no | Session lifetime, default `28800` (8 h). |
+| `IDS_SESSION_COOKIE_SECURE` | no | `true` forces the `Secure` flag. Unset = decided per request (`https` or `X-Forwarded-Proto: https`). |
+| `NDR_FRONTEND_DIST` | no | Where the bundle lives, default `frontend/dist` relative to the repository root. |
+| `IDS_SENSOR_STALE_AFTER_S` | no | A sensor is "online" only if an event arrived within this window (default 300 s). |
+| `IDS_ZEEK_ENABLED` / `IDS_ZEEK_LOG_DIR` | no | Enable the in-process log tailer. Leave off for push-based sensors. |
+| `DAGSHUB_USER_TOKEN`, `DAGSHUB_USERNAME` | build only | Let the build fetch DVC artefacts when they are not committed. |
 
-## Why the CICIDS model is missing after a deploy
+## Authentication
 
-`models/best_model.joblib` and `models/preprocessor.joblib` are **DVC outputs** and
-`.gitignore` keeps every `*.joblib` out of git except the Zeek model. Render only
-clones git, so a build without an explicit fetch step produces a service where
-`/api/v1/health` reports:
+Two mechanisms, one secret:
 
-```json
-{"components": {"cicids_model": {"loaded": false, "error": ".../models/best_model.joblib (batch model not found); run `python scripts/fetch_models.py`"}}}
+- **Machines** (`curl`, sensors, CI) send `X-API-Key: $NDR_API_KEY`.
+- **Browsers** post the key once to `POST /api/v1/session`; the server verifies it
+  and returns `ndr_session`, an HMAC-signed token in an `HttpOnly`, `SameSite=Lax`
+  cookie. JavaScript never sees the key or the token.
+
+The cookie authorises **reads only**. Ingestion endpoints (`POST /api/v1/zeek/*`,
+`POST /api/v1/ingest/cic`) require the header, so a cross-site request cannot push
+events. `/ws/alerts` accepts the cookie (same-origin handshake) or `?api_key=` for
+scripts, and closes with code `1008` otherwise.
+
+With no key configured the process still starts (health reports it) but every data
+endpoint returns `503 auth_not_configured` — fail closed, with a remediation list.
+
+## Endpoints
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/v1/health` | public | component state, build commit, DB integrity, models |
+| GET | `/api/v1/ready` | public | readiness for the deployed mode |
+| GET | `/api/v1/metrics/overview` | yes | totals, rates, distributions, series, sensors, models, recent |
+| GET | `/api/v1/metrics/live` | yes | recent detections + `no_new_events` verdict |
+| GET | `/api/v1/detections` | yes | filters, search, pagination (`limit` ≤ 200) |
+| GET | `/api/v1/detections/{id}` | yes | `zeek:12` / `cicids:7`, full record + raw JSON |
+| GET | `/api/v1/detections/export` | yes | same filters, streamed CSV |
+| GET | `/api/v1/sensors` | yes | per-sensor counters and timestamp-based liveness |
+| GET | `/api/v1/models/status` | yes | both models, schemas, runtime counters, latency policy |
+| GET | `/api/v1/system/status` | yes | composed health, DB, WebSocket, build, endpoints |
+| GET/POST/DELETE | `/api/v1/session` | mixed | session state, login, logout |
+| WS | `/ws/alerts` | yes | `hello`, `event` messages |
+| POST | `/api/v1/zeek/ingest/records` | key | sensor push (normalise, store, score, broadcast) |
+| POST | `/api/v1/ingest/cic` | key | CICIDS flow scoring |
+
+## Verifying a deploy
+
+```bash
+BASE=https://network-intrusion-detection-advanced.onrender.com
+curl -s $BASE/api/v1/health | jq '{status, build, models}'        # commit + models loaded
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/api/v1/detections # 401 without a key
+curl -s -H "X-API-Key: $NDR_API_KEY" $BASE/api/v1/metrics/overview | jq '.totals'
+curl -s $BASE/ | grep -o 'assets/index-[^"]*\.js'                # dashboard bundle
 ```
 
-`python scripts/fetch_models.py` runs during the build and fixes that. It tries,
-in order:
-
-1. the file is already present and non-empty (no-op);
-2. `dvc pull models/best_model.joblib models/preprocessor.joblib -r origin`
-   using credentials from the environment. The remote is an HTTPS DagsHub DVC
-   endpoint, so it authenticates with basic auth: `DAGSHUB_USER_TOKEN` as the
-   password and `DAGSHUB_USERNAME` as the user. Before pulling, the script strips
-   options that do not belong to this remote type (`access_key_id`,
-   `secret_access_key`) — DVC rejects those with `extra keys not allowed` and then
-   refuses to run *any* command. Credentials live in the gitignored
-   `.dvc/config.local` (mode 0600) and are never printed;
-3. `MODEL_ARTIFACTS_URL`, a tar.gz/zip containing `models/`, with an optional
-   `MODEL_ARTIFACTS_TOKEN` bearer token.
-
-The script exits 0 even when nothing could be fetched: the service starts in
-degraded mode (`cicids_model.loaded = false`, `/api/v1/ingest/cic` answers `503`
-with `code = "cicids_model_unavailable"`, Zeek scoring unaffected). Use
-`python scripts/fetch_models.py --check` to inspect and `--strict` to turn a
-missing artefact into a build failure.
-
-### The artefacts ship in Git
-
-`models/best_model.joblib` and `models/preprocessor.joblib` are committed to the repository
-(and mirrored to the DagsHub remote), so a Render build finds them in the clone:
-`scripts/fetch_models.py` reports both as `ok` and never contacts DVC. The fetch step remains
-as the fallback for a checkout that lacks them — it also reports a file that is *committed but
-absent from the checkout*, which is a broken clone rather than an empty remote. `dvc.lock`
-records the md5/size of the committed bytes, so `verify_artifacts.py` reports no drift.
-
-### Publishing the artefacts (one command, verified)
-
-The fetch step can only download what was pushed, so publishing comes first.
-`scripts/dvc_publish.py` does the whole sequence and refuses to claim success
-without proof:
-
-```sh
-DAGSHUB_USER_TOKEN=<token with repo write scope> python scripts/dvc_publish.py
-```
-
-1. repairs `.dvc/config.local` (removes options invalid for the remote type) and
-   applies basic-auth credentials from the environment;
-2. loads both artefacts through `src.serving.predictor.Predictor` and runs a smoke
-   prediction — a bundle that cannot score is never uploaded;
-3. checks every `dvc.yaml` dependency is on disk;
-4. `dvc commit -f`, or, when a sibling stage output is absent (cleaned
-   `data/processed/*`, `reports/*`), a surgical re-lock that rewrites only the
-   md5/size of the two artefacts in `dvc.lock`;
-5. `dvc push` and then verifies: `dvc status -c` plus an authenticated `HEAD` on
-   each remote object (`/files/md5/xx/…`) with the size compared to the file.
-
-Exit codes: `0` published and verified, `2` credentials/config, `3` artefacts
-unusable or a dependency missing, `4` commit/push failed, `5` verification failed.
-
-When the step re-locks `dvc.lock` (because the artefacts on disk differ from the
-recorded hashes) it prints `NEXT: dvc.lock changed` — commit and push the lock, or
-the next build resolves the previous, unpublished objects.
-
-The same step runs in the `publish-artifacts` workflow (Actions →
-publish-artifacts → Run workflow), which can optionally retrain first and then
-POST `RENDER_DEPLOY_HOOK_URL` so the new artefacts reach the service without a
-manual Render action.
-
-Verify from a clean clone before redeploying:
-
-```sh
-git clone <repo> /tmp/ndr-check && cd /tmp/ndr-check
-DAGSHUB_USER_TOKEN=... python scripts/fetch_models.py --strict
-ls -l models/best_model.joblib models/preprocessor.joblib
-```
-
-## Opening the dashboard
-
-The dashboard talks to the authenticated API, so it needs the key once:
-
-```
-https://<service>.onrender.com/?api_key=<the value of NDR_API_KEY>
-```
-
-The key is stored in the browser's `localStorage` (`ids_api_key`); the banner at
-the top of the page tells you when it is missing.
-
-## Feeding network events
-
-The browser never asks a human to type flow features. Two machine paths exist:
-
-1. **Push raw Zeek records** (works from anywhere, this is the path for a hosted
-   deployment):
-
-   ```sh
-   curl -X POST "$BASE/api/v1/zeek/ingest/records" \
-     -H "X-API-Key: $NDR_API_KEY" -H "Content-Type: application/json" \
-     -d '{"records": [{"ts": 1700000000.0, "uid": "C1", "id.orig_h": "10.0.0.5", "id.orig_p": 41000,
-                       "id.resp_h": "10.0.0.9", "id.resp_p": 23, "proto": "tcp", "service": "-",
-                       "duration": 0.0, "orig_bytes": 0, "resp_bytes": 0, "conn_state": "S0",
-                       "orig_pkts": 1, "resp_pkts": 0, "orig_ip_bytes": 60, "resp_ip_bytes": 0}],
-        "sensor_id": "edge-1"}'
-   ```
-
-   The server normalises, stores idempotently, scores with the Zeek model and
-   persists a detection row.
-
-2. **Tail a local Zeek log directory** — set `IDS_ZEEK_ENABLED=true` and point
-   `IDS_ZEEK_LOG_DIR` at a directory that Zeek writes (`LogAscii::use_json = T`).
-   This only makes sense when Zeek runs in the same container/volume.
-
-`POST /api/v1/zeek/ingest/events` accepts already-normalised event envelopes for
-sensors that do their own normalisation.
-
-## Docker
-
-```sh
-docker build -f deploy/Dockerfile.nids -t nids-serving .
-docker run -p 8000:8000 -e PORT=8000 -e NDR_API_KEY=... \
-  -v "$PWD/data:/app/data" nids-serving
-```
-
-The image ships the git-tracked Zeek model. The CICIDS artefacts are DVC-tracked
-and are only present when they exist in the build context.
+`build.commit` must equal the commit you intended to deploy. A stale commit means
+the tracked branch was not the one you pushed (Render follows
+`feature/realtime-ndr-platform`).
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `/api/v1/health` is `200` but every data call is `503` with `code=auth_not_configured` | no API key in the environment | set `NDR_API_KEY` (or `IDS_API_KEY`) and redeploy |
-| data calls return `401` / `code=invalid_api_key` | key configured, wrong or missing header | open the dashboard as `/?api_key=...` |
-| "Zeek Status: blocked" on the dashboard | the page has no key yet | open `/?api_key=...` once |
-| `components.zeek_model.loaded = false` | `models/zeek/zeek_model.joblib` missing or a schema mismatch | keep the tracked artefact, or fix `IDS_ZEEK_MODEL_PATH`; the error text says which |
-| `components.cicids_model.loaded = false` | the DVC artefact was not fetched (never pushed, or no credentials at build time) | run `python scripts/dvc_publish.py` (or the `publish-artifacts` workflow) to publish, set `DAGSHUB_USER_TOKEN` on Render, redeploy; `python scripts/fetch_models.py --check` shows what the build sees |
-| `configuration error - extra keys not allowed @ data['remote']['origin']['access_key_id']` | `.dvc/config.local` carries S3 options while the remote is the HTTPS DagsHub endpoint | `python scripts/dvc_remote.py --fix` (the build runs the same repair automatically) |
-| `/api/v1/health` reports `cicids_model.error` mentioning `not found` but the file exists | `IDS_MODEL_PATH` points somewhere else | check the resolved path in `components.cicids_model.model_path` |
-| Zeek Events stays 0 | nothing is being pushed and no log directory exists | use `/api/v1/zeek/ingest/records` or enable the tailer |
-| Scored Detections stays 0 while events grow | every pushed event is a non-`conn` log, or the model failed to load | check the detection rows: `reason` explains it |
-| data disappears after a deploy | SQLite lives on the ephemeral filesystem | mount a Render disk and set `IDS_DB_PATH=/var/data/ids.db` |
+| `503 auth_not_configured` | no key in the environment | set `NDR_API_KEY`, redeploy |
+| Dashboard shows the login screen but rejects the key | key mismatch (whitespace) | paste the exact value; check `auth.source` in `/api/v1/health` |
+| Login succeeds, reads return 401 | `Secure` cookie over plain HTTP | use HTTPS or set `IDS_SESSION_COOKIE_SECURE=false` locally |
+| WebSocket closes with `1008` | no session and no `?api_key` | sign in first, or pass the key explicitly |
+| Dashboard empty, "No new network events received." | nothing ingested yet | push a sensor batch or enable local ingestion |
+| Everything zero after a deploy | SQLite on ephemeral disk | mount a disk at `/var/data` and set `IDS_DB_PATH` |
+| CICIDS `loaded: false` | artefacts missing | run `python scripts/fetch_models.py` in the build; it explains which check failed |

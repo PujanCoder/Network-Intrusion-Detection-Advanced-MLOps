@@ -1,114 +1,141 @@
-import { useEffect, useRef } from "react";
-import type { NetworkEvent } from "../lib/api";
-import { formatBytes, formatDateTime, formatTime, severityClass } from "../lib/format";
-import { Chip, KeyValue } from "./ui";
+import { useEffect, useState } from "react";
 
-export function EventDrawer({
-  event,
-  onClose,
-}: {
-  event: NetworkEvent | null;
-  onClose: () => void;
-}) {
-  const closeRef = useRef<HTMLButtonElement>(null);
+import { api, type Detection } from "../lib/api";
+import { confidence, duration, formatBytes, formatDateTime, severityTone } from "../lib/format";
+import { ErrorBox, KeyValue, Loading, SeverityBadge, SourceBadge } from "./ui";
+
+export function DetectionDrawer({ id, onClose }: { id: string | null; onClose: () => void }) {
+  const [record, setRecord] = useState<Detection | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!event) return;
-    closeRef.current?.focus();
-    const handler = (key: KeyboardEvent) => {
-      if (key.key === "Escape") onClose();
+    if (!id) {
+      setRecord(null);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    setError(null);
+    api
+      .detection(id)
+      .then((data) => active && setRecord(data))
+      .catch((caught) => active && setError(caught instanceof Error ? caught.message : String(caught)))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [event, onClose]);
+  }, [id]);
 
-  if (!event) return null;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
-  const raw = event.raw && Object.keys(event.raw).length ? JSON.stringify(event.raw, null, 2) : "{}";
+  if (!id) return null;
+
+  const probabilities = record?.probabilities ? Object.entries(record.probabilities) : [];
+  const topProbability = Math.max(...probabilities.map(([, value]) => value), 0.0001);
 
   return (
-    <div className="drawer-backdrop" onClick={onClose}>
-      <aside className="drawer" onClick={(stop) => stop.stopPropagation()}>
-        <div className="drawer-head">
+    <div className="drawer-backdrop" onClick={onClose} role="presentation">
+      <aside className="drawer" onClick={(event) => event.stopPropagation()} aria-label="Detection detail">
+        <header className="drawer-head">
           <div>
-            <div className="drawer-title">
-              Event #{event.id} · {event.prediction ?? "Unclassified"}
-            </div>
-            <div className="drawer-sub">
-              {formatDateTime(event.ts)} · {event.sensor} · {event.log_type}.log
-            </div>
+            <div className="drawer-title mono">{id}</div>
+            <div className="muted small">complete stored record</div>
           </div>
-          <button ref={closeRef} className="btn ghost" onClick={onClose}>
-            Close
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+            ✕
           </button>
-        </div>
+        </header>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
-          <Chip text={event.prediction ?? "unclassified"} className={event.is_malicious ? "pred-attack" : event.prediction ? "pred-benign" : "pred-unclassified"} />
-          <Chip text={event.severity ?? "info"} className={severityClass(event.severity)} />
-          {event.confidence !== null && (
-            <Chip text={`confidence ${(event.confidence * 100).toFixed(1)}%`} className="sev-info" />
-          )}
-          {event.latency_ms !== null && <Chip text={`${event.latency_ms.toFixed(2)} ms inference`} className="sev-info" />}
-        </div>
+        <ErrorBox error={error} />
+        {loading && !record && <Loading label="Loading record" />}
 
-        <KeyValue
-          rows={[
-            ["Event UID", <span className="mono">{event.event_uid}</span>],
-            ["Timestamp", <span className="mono">{formatDateTime(event.ts)}</span>],
-            ["Ingested", <span className="mono">{formatDateTime(event.ingested_at)}</span>],
-            ["Source", <span className="mono">{event.src_ip ?? "—"}:{event.src_port ?? "—"}</span>],
-            ["Destination", <span className="mono">{event.dst_ip ?? "—"}:{event.dst_port ?? "—"}</span>],
-            ["Protocol / service", <span className="mono">{event.proto ?? "—"} / {event.service ?? "—"}</span>],
-            ["Connection state", <span className="mono">{event.conn_state ?? "—"}</span>],
-            ["Duration", <span className="mono">{event.duration !== null ? `${event.duration.toFixed(4)} s` : "—"}</span>],
-            [
-              "Volume",
-              <span className="mono">
-                {formatBytes(event.orig_bytes)} out / {formatBytes(event.resp_bytes)} in ·{" "}
-                {event.orig_pkts ?? 0}/{event.resp_pkts ?? 0} pkts
-              </span>,
-            ],
-            ["Model", <span className="mono">{event.model_name ?? "—"} {event.model_version ? `· ${event.model_version}` : ""}</span>],
-            ["Threshold", <span className="mono">{event.threshold ?? "—"}</span>],
-            ["Explanation", <span>{event.explanation ?? "—"}</span>],
-          ]}
-        />
-
-        {event.alerts && event.alerts.length > 0 && (
-          <div style={{ marginTop: 22 }}>
-            <div className="panel-title" style={{ marginBottom: 10 }}>
-              Detection evidence ({event.alerts.length})
+        {record && (
+          <div className="drawer-body">
+            <div className="drawer-badges">
+              <SeverityBadge severity={record.severity} />
+              <SourceBadge source={record.source} experimental={record.model.experimental} />
+              <span className={`badge ${record.is_attack ? "sev-critical" : "sev-info"}`}>
+                {record.is_attack ? "attack" : "benign"}
+              </span>
+              <span className="badge">{record.status}</span>
             </div>
-            {event.alerts.map((alert, index) => (
-              <div key={`${alert.rule}-${index}`} className={`alert-card ${(alert.severity || "").toLowerCase()}`}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                  <span className="alert-rule">{alert.rule}</span>
-                  <Chip text={alert.severity} className={severityClass(alert.severity)} />
+
+            <h3>Prediction</h3>
+            <KeyValue
+              rows={[
+                ["Label", <span className="mono">{record.label}</span>],
+                ["Confidence", <span className="mono">{confidence(record.confidence)}</span>],
+                ["Severity", <span className={severityTone(record.severity)}>{record.severity}</span>],
+                ["Severity source", <span className="mono tiny">{record.severity_source}</span>],
+                ["Model", `${record.model.name} (${record.model.schema ?? "schema unknown"})`],
+                ["Explanation", <span className="small">{record.explanation}</span>],
+              ]}
+            />
+
+            {probabilities.length > 0 && (
+              <>
+                <h3>Class probabilities</h3>
+                <div className="proba-list">
+                  {probabilities
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([label, value]) => (
+                      <div key={label} className="proba-row">
+                        <span className="mono">{label}</span>
+                        <span className="proba-track">
+                          <span style={{ width: `${Math.max(2, (value / topProbability) * 100)}%` }} />
+                        </span>
+                        <span className="mono muted">{(value * 100).toFixed(2)}%</span>
+                      </div>
+                    ))}
                 </div>
-                <div className="alert-desc">{alert.explanation}</div>
-                <div className="mono dim" style={{ marginTop: 6, fontSize: 10.5 }}>
-                  category {alert.category} · confidence{" "}
-                  {alert.confidence !== null ? `${(alert.confidence * 100).toFixed(0)}%` : "—"}
-                </div>
-                <pre className="json" style={{ marginTop: 8, maxHeight: 180 }}>
-                  {JSON.stringify(alert.evidence, null, 2)}
-                </pre>
-              </div>
-            ))}
+              </>
+            )}
+
+            <h3>Network flow</h3>
+            <KeyValue
+              rows={[
+                ["Timestamp", <span className="mono">{formatDateTime(record.ts)}</span>],
+                ["Sensor", <span className="mono">{record.sensor_id ?? "—"}</span>],
+                ["Log type", <span className="mono">{record.log_type ?? "—"}</span>],
+                [
+                  "Source",
+                  <span className="mono">
+                    {record.src_ip ?? "—"}
+                    {record.src_port !== null ? `:${record.src_port}` : ""}
+                  </span>,
+                ],
+                [
+                  "Destination",
+                  <span className="mono">
+                    {record.dst_ip ?? "—"}
+                    {record.dst_port !== null ? `:${record.dst_port}` : ""}
+                  </span>,
+                ],
+                ["Protocol / service", `${(record.proto ?? "—").toUpperCase()} / ${record.service ?? "—"}`],
+                ["Connection state", <span className="mono">{record.conn_state ?? "—"}</span>],
+                ["Duration", duration(record.duration)],
+                [
+                  "Bytes (orig / resp)",
+                  `${formatBytes(record.orig_bytes)} / ${formatBytes(record.resp_bytes)}`,
+                ],
+                [
+                  "Packets (orig / resp)",
+                  `${record.orig_pkts ?? "—"} / ${record.resp_pkts ?? "—"}`,
+                ],
+              ]}
+            />
+
+            <h3>Original event</h3>
+            <pre className="json">{JSON.stringify(record.raw ?? {}, null, 2)}</pre>
           </div>
         )}
-
-        <div style={{ marginTop: 22 }}>
-          <div className="panel-title" style={{ marginBottom: 8 }}>
-            Original Zeek record
-          </div>
-          <pre className="json">{raw}</pre>
-        </div>
-
-        <div className="mono dim" style={{ marginTop: 12, fontSize: 10.5 }}>
-          Event time {formatTime(event.ts)} · stored in SQLite · served from /api/events/{event.id}
-        </div>
       </aside>
     </div>
   );

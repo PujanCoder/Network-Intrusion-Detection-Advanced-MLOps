@@ -192,10 +192,10 @@ class ZeekStore:
             rows = [dict(r) for r in c.execute("SELECT * FROM zeek_ingestion_status ORDER BY updated_at DESC").fetchall()]
             return rows
 
-    def insert_detection(self, event: dict[str, Any], prediction: dict[str, Any]) -> None:
+    def insert_detection(self, event: dict[str, Any], prediction: dict[str, Any]) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._conn() as c:
-            c.execute(
+            cur = c.execute(
                 """
                 INSERT INTO zeek_detections (
                     event_id, ts, log_type, sensor_id, src_ip, src_port, dst_ip, dst_port, proto, service,
@@ -215,6 +215,7 @@ class ZeekStore:
                     now,
                 ),
             )
+            return int(cur.lastrowid or 0)
 
     def recent_detections(self, limit: int = 100, only_attacks: bool = False) -> list[dict[str, Any]]:
         q = "SELECT * FROM zeek_detections"

@@ -1,31 +1,57 @@
 /**
- * Typed client for the NDR REST/WebSocket API.
+ * Client for the unified NDR API served by `src.serving`.
  *
- * The shapes mirror the payloads produced by `src/api/routes.py` and
- * `src/realtime/store.py`; keep them in sync when the backend changes.
+ * Authentication is a same-origin HttpOnly session cookie: the browser posts the
+ * platform key once to /api/v1/session and never stores it. `credentials:
+ * "same-origin"` is what carries the cookie on every read, including the
+ * WebSocket upgrade.
  */
 
-export interface Alert {
-  rule: string;
-  category: string;
-  severity: string;
-  confidence: number | null;
-  explanation: string;
-  evidence: Record<string, unknown>;
-  created_at: number;
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
 }
 
-export interface NetworkEvent {
-  id: number;
-  event_uid: string;
-  ts: number;
-  iso_time?: string;
-  ingested_at: number;
-  log_type: string;
-  sensor: string;
+export const UNAUTHORIZED_EVENT = "ndr:unauthorized";
+
+export type Severity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO" | "UNKNOWN";
+export type Source = "zeek" | "cicids";
+
+export interface SeverityBand {
+  severity: Severity;
+  attack: boolean | null;
+  min_confidence: number;
+}
+
+export interface SeverityPolicy {
+  source: string;
+  description: string;
+  bands: SeverityBand[];
+}
+
+export interface DetectionModel {
+  source: Source;
+  name: string;
+  schema: string | null;
+  experimental: boolean;
+}
+
+export interface Detection {
+  id: string;
+  source: Source;
+  ts: string | null;
+  sensor_id: string | null;
+  log_type: string | null;
   src_ip: string | null;
-  dst_ip: string | null;
   src_port: number | null;
+  dst_ip: string | null;
   dst_port: number | null;
   proto: string | null;
   service: string | null;
@@ -35,91 +61,69 @@ export interface NetworkEvent {
   resp_bytes: number | null;
   orig_pkts: number | null;
   resp_pkts: number | null;
-  orig_ip_bytes: number | null;
-  resp_ip_bytes: number | null;
-  prediction: string | null;
+  label: string;
+  is_attack: boolean;
   confidence: number | null;
-  severity: string | null;
-  is_malicious: boolean | null;
-  explanation: string | null;
-  latency_ms: number | null;
-  model_name: string | null;
-  model_version: string | null;
-  prediction_error?: string | null;
-  threshold: number | null;
-  raw: Record<string, unknown>;
-  alerts?: Alert[];
+  status: string;
+  severity: Severity;
+  severity_source: string;
+  model: DetectionModel;
+  explanation: string;
+  probabilities?: Record<string, number> | null;
+  raw?: Record<string, unknown>;
+  reason?: string | null;
+  event_severity?: string | null;
 }
 
-export interface EventPage {
-  items: NetworkEvent[];
+export interface DetectionPage {
+  items: Detection[];
   total: number;
   limit: number;
   offset: number;
+  has_more: boolean;
+  sort: string;
+  severity_policy: SeverityPolicy;
 }
 
-export interface WebsocketStatus {
-  clients: number;
-  max_clients: number;
-  dropped_messages: number;
-  rejected_clients: number;
-}
-
-export interface OverviewModel {
-  name: string;
-  version: string;
-  loaded: boolean;
-  load_error: string | null;
-  threshold: number | null;
-  trained_at: string | null;
-  training_datasets: Record<string, number> | null;
-}
-
-export interface OverviewSensor {
-  sensor_id: string;
-  mode: string;
-  replay_records: number;
-  ingestion_running: boolean;
-  remote_ingest_enabled: boolean;
-  log_dir_exists: boolean;
-  log_file_count: number;
-  seconds_since_event: number | null;
-  last_error: string | null;
-}
-
-export interface Overview {
-  total_events: number;
-  total_predictions: number;
-  attacks: number;
-  benign: number;
-  suspicious: number;
+export interface ModelRuntime {
+  predictions: number;
+  scored: number;
   unclassified: number;
-  critical_alerts: number;
-  critical_detections: number;
-  total_alerts: number;
-  dead_letters: number;
-  model_errors: number;
-  events_per_second: number;
-  predictions_per_second: number;
-  events_per_second_live?: number;
-  predictions_per_second_live?: number;
-  burst_window_s?: number;
-  avg_prediction_latency_ms: number | null;
-  last_event_ts: number | null;
-  last_ingest_ts: number | null;
-  seconds_since_last_event: number | null;
-  window_s: number;
-  generated_at: number;
-  no_new_events?: boolean;
-  model?: OverviewModel;
-  sensor?: OverviewSensor;
-  websocket?: WebsocketStatus;
+  last_inference_ts: string | null;
+  label_counts: Record<string, number>;
+}
+
+export interface ModelInfo {
+  key: Source;
+  name: string;
+  task: string;
+  loaded: boolean;
+  error: string | null;
+  error_kind: string | null;
+  estimator: string | null;
+  version: string | null;
+  trained_at: string | null;
+  loaded_at: string | null;
+  artifact: { path?: string; exists?: boolean; bytes?: number | null; sha256?: string } | null;
+  schema: {
+    schema_version: string | null;
+    features: number | null;
+    model_features: number | null;
+    feature_names: string[] | null;
+    threshold?: number | null;
+  };
+  classes: string[] | null;
+  experimental: boolean;
+  notes: string[];
+  runtime: ModelRuntime;
+  latency: { available: boolean; reason: string };
 }
 
 export interface SeriesPoint {
   t: number;
   events: number;
   predictions: number;
+  attacks: number;
   bytes: number;
 }
 
@@ -138,180 +142,125 @@ export interface BucketCount {
   count: number;
 }
 
-export interface Analytics {
-  window_s: number;
-  generated_at: number;
-  series: SeriesPoint[];
-  attack_distribution: DistributionItem[];
-  protocol_distribution: DistributionItem[];
-  severity_distribution: DistributionItem[];
-  top_src_ips: IpCount[];
-  top_dst_ips: IpCount[];
-  confidence_histogram: BucketCount[];
-  prediction_counts: Record<string, number>;
-}
-
-export interface ModelMetrics {
-  support: number;
-  precision: number | null;
-  recall: number | null;
-  f1: number | null;
-  false_positive_rate: number;
-  tp: number;
-  fp: number;
-  tn: number;
-  fn: number;
-  confusion_matrix?: number[][] | null;
-}
-
-export interface MetricsBundle {
-  binary?: ModelMetrics | null;
-  multiclass?: { macro_f1?: number | null } | null;
-}
-
-export interface LiveMetrics {
-  validation?: MetricsBundle | null;
-  test?: MetricsBundle | null;
-  official_test_partitions?: Record<string, MetricsBundle>;
-  cross_dataset?: {
-    unseen_dataset: string;
-    trained_on: string[];
-    metrics: {
-      binary: ModelMetrics;
-      multiclass?: { macro_f1?: number | null } | null;
-    };
-  } | null;
-}
-
-export interface FeatureImportance {
-  feature: string;
-  importance: number;
-}
-
-export interface LiveModel {
-  kind: string;
-  name: string;
-  version: string;
-  algorithm?: string | null;
-  trained_at?: string | null;
-  loaded: boolean;
-  load_error: string | null;
-  artifact_path?: string;
-  threshold: number | null;
-  target_false_positive_rate?: number | null;
-  training_datasets?: Record<string, number> | null;
-  dataset_distribution?: Record<string, unknown> | null;
-  row_counts?: { train: number; validation: number; test: number } | null;
-  label_distribution?: Record<string, number> | null;
-  classes?: string[] | null;
-  feature_schema?: string[] | null;
-  top_features?: FeatureImportance[] | null;
-  metrics: LiveMetrics;
-  latency?: Record<string, unknown> | null;
-  candidates?: Record<string, { validation_macro_f1: number }> | null;
-  environment?: { python?: string; numpy?: string; pandas?: string } | null;
-  notes: string[];
-}
-
-export interface LatencyPercentiles {
-  count: number;
-  avg_ms: number | null;
-  p50_ms: number | null;
-  p95_ms: number | null;
-  max_ms: number | null;
-}
-
-export interface RuntimeInfo {
-  predictions: number;
-  prediction_count_by_label: Record<string, number>;
-  unclassified_events: number;
-  total_events: number;
-  model_errors: number;
-  dead_letters: number;
-  avg_prediction_latency_ms: number | null;
-  latency_percentiles: LatencyPercentiles;
-  confidence_histogram: BucketCount[];
-  predictions_per_second: number;
-}
-
-export interface BatchModel {
-  kind: string;
-  name: string;
-  task: string;
-  best_model: string | null;
-  training_results_available: boolean;
-  evaluation_results_available: boolean;
-  validation_metrics: Record<string, { f1_score?: number; f1?: number; accuracy?: number }>;
-  test_metrics: Record<string, number | string>;
-  confusion_matrix?: number[][] | null;
-  notes: string[];
-}
-
-export interface ModelInfo {
-  live_model: LiveModel;
-  runtime: RuntimeInfo;
-  batch_model: BatchModel;
-}
-
-export interface ReaderInfo {
-  log_dir: string;
-  log_dir_exists: boolean;
-  log_file_count: number;
-  files_tracked: number;
-  rotations: number;
-  truncations: number;
-  unparsed_lines: number;
-}
-
-export interface SensorStatus {
+export interface SensorRow {
   sensor_id: string;
-  sensor_mode: string;
-  replay_records: number;
-  ingestion_running: boolean;
-  ingest_enabled: boolean;
-  remote_ingest_enabled: boolean;
-  poll_interval_s: number;
-  counters: Record<string, number>;
-  last_poll_at: number | null;
-  last_event_at: number | null;
-  seconds_since_event: number | null;
+  status: "online" | "offline" | "unknown";
+  status_reason: string;
+  seconds_since_ingest: number | null;
+  last_seen_ts: string | null;
+  last_ingested_at: string | null;
   last_error: string | null;
-  reader: ReaderInfo;
-  detectors: { rules: string[] };
-}
-
-export interface IngestionStateRow {
-  source_file: string;
-  offset: number | null;
-  size: number | null;
-  updated_at: number | null;
-  seconds_since_update: number | null;
-}
-
-export interface DatabaseStatus {
-  path: string;
-  size_bytes: number;
-  integrity: string;
   events: number;
-  journal_mode: string;
-}
-
-export interface ProcessingDelay {
-  avg_delay_s: number | null;
-  max_delay_s: number | null;
-  samples: number;
-}
-
-export interface SensorsInfo {
-  sensor: SensorStatus;
-  ingestion_state: IngestionStateRow[];
-  database: DatabaseStatus;
-  api: { status: string; uptime_s: number; version: string };
-  websocket: WebsocketStatus;
-  model: { loaded: boolean; name: string; version: string; load_error: string | null };
-  processing_delay: ProcessingDelay;
+  detections: number;
+  scored: number;
+  unclassified: number;
+  attacks: number;
+  duplicates: number;
   dead_letters: number;
+  is_local_ingestion?: boolean;
+}
+
+export interface Overview {
+  generated_at: string;
   server_time: number;
+  window_s: number;
+  bucket_s: number;
+  app: { name: string; version: string; build: { commit: string | null; branch: string | null; service: string | null } };
+  totals: {
+    events: number;
+    detections: number;
+    attacks: number;
+    benign: number;
+    scored: number;
+    unclassified: number;
+    detection_rate: number | null;
+    dead_letters: number;
+    by_source: Record<string, number>;
+    by_log_type: Record<string, number>;
+    last_detection_ts: string | null;
+  };
+  rates: { window_s: number; events_per_second: number; attacks_per_second: number };
+  activity: {
+    last_event_ts: string | null;
+    seconds_since_event: number | null;
+    last_detection_ts: string | null;
+    no_new_events: boolean;
+    message: string;
+  };
+  sensors: {
+    total: number;
+    online: number;
+    offline: number;
+    unknown: number;
+    stale_after_s: number;
+    items: SensorRow[];
+  };
+  models: Record<Source, ModelInfo>;
+  severity_policy: SeverityPolicy;
+  series: SeriesPoint[];
+  distributions: {
+    labels: DistributionItem[];
+    protocols: DistributionItem[];
+    severities: DistributionItem[];
+    log_types: DistributionItem[];
+    sources: DistributionItem[];
+    confidence: BucketCount[];
+    top_src_ips: IpCount[];
+    top_dst_ips: IpCount[];
+  };
+  recent: Detection[];
+}
+
+export interface LiveFeed {
+  generated_at: string;
+  server_time: number;
+  records: Detection[];
+  total: number;
+  last_event_ts: string | null;
+  seconds_since_event: number | null;
+  no_new_events: boolean;
+  activity_message: string | null;
+  websocket: { clients: number; max_clients: number; broadcasts: number; rejected_clients: number; available: boolean };
+}
+
+export interface SensorPayload {
+  generated_at: string;
+  stale_after_s: number;
+  summary: { total: number; online: number; offline: number; unknown: number; events: number; dead_letters: number };
+  sensors: SensorRow[];
+  ingestion: Record<string, unknown>;
+  expected: {
+    sensor_id: string;
+    mode: string;
+    local_ingestion_enabled: boolean;
+    log_dir: string;
+    log_types: string[];
+  };
+  counters: { events: number; by_log_type: Record<string, number>; dead_letters: number; last_event_ts: string | null };
+}
+
+export interface SystemStatus {
+  generated_at: string;
+  server_time: number;
+  status: string;
+  degraded_components: string[];
+  app: { name: string; version: string };
+  build: { commit: string | null; branch: string | null; service: string | null };
+  uptime_s: number;
+  components: Record<string, Record<string, any>>;
+  database: { path: string; exists: boolean; integrity: string; events?: number; detections?: number };
+  websocket: { clients: number; max_clients: number; broadcasts: number; rejected_clients: number; available: boolean };
+  auth: Record<string, any>;
+  endpoints: Record<string, string>;
+}
+
+export interface SessionState {
+  configured: boolean;
+  authenticated: boolean;
+  method: "session" | "api_key" | null;
+  expires_at: number | null;
+  session_ttl_s?: number;
+  source?: string | null;
 }
 
 export type QueryValue = string | number | boolean | null | undefined;
@@ -326,27 +275,70 @@ export function buildQuery(params: Record<string, QueryValue>): string {
   return query ? `?${query}` : "";
 }
 
-function apiKey(): string {
-  return import.meta.env.VITE_API_KEY ?? "";
-}
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    credentials: "same-origin",
+    headers: { Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}), ...init.headers },
+  });
 
-export async function getJson<T = unknown>(path: string): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json" };
-  const key = apiKey();
-  if (key) headers["X-API-Key"] = key;
-
-  const response = await fetch(path, { headers });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText} (${path})`);
+    let code: string | undefined;
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      const detail = body?.detail;
+      if (typeof detail === "string") message = detail;
+      else if (detail && typeof detail === "object") {
+        message = detail.message ?? message;
+        code = detail.code;
+      }
+    } catch {
+      /* non-JSON error body (proxy page) */
+    }
+    if (response.status === 401) window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    throw new ApiError(message, response.status, code);
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
+export interface DetectionQuery {
+  limit?: number;
+  offset?: number;
+  source?: Source | null;
+  label?: string | null;
+  severity?: Severity | null;
+  status?: "scored" | "unclassified" | null;
+  sensor_id?: string | null;
+  model?: Source | null;
+  q?: string | null;
+  start?: string | null;
+  end?: string | null;
+  only_attacks?: boolean;
+  sort?: "ts_desc" | "ts_asc";
+}
+
+export const api = {
+  session: () => request<SessionState>("/api/v1/session"),
+  login: (apiKey: string) =>
+    request<{ authenticated: boolean; method: string; expires_at: number }>("/api/v1/session", {
+      method: "POST",
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+  logout: () => request<{ authenticated: boolean }>("/api/v1/session", { method: "DELETE" }),
+  overview: (windowS = 3600) => request<Overview>(`/api/v1/metrics/overview${buildQuery({ window: windowS })}`),
+  live: (limit = 100) => request<LiveFeed>(`/api/v1/metrics/live${buildQuery({ limit })}`),
+  detections: (query: DetectionQuery) => request<DetectionPage>(`/api/v1/detections${buildQuery({ ...query })}`),
+  detection: (id: string) => request<Detection>(`/api/v1/detections/${encodeURIComponent(id)}`),
+  exportUrl: (query: DetectionQuery) => `/api/v1/detections/export${buildQuery({ ...query })}`,
+  sensors: () => request<SensorPayload>("/api/v1/sensors"),
+  models: () => request<{ generated_at: string; models: Record<Source, ModelInfo>; severity_policy: SeverityPolicy; counts: Record<string, unknown> }>("/api/v1/models/status"),
+  system: () => request<SystemStatus>("/api/v1/system/status"),
+  health: () => request<Record<string, any>>("/api/v1/health"),
+};
+
 export function wsUrl(): string {
-  const base =
-    import.meta.env.VITE_WS_URL ??
-    `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/ws`;
-  const key = apiKey();
-  if (!key) return base;
-  return `${base}${base.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(key)}`;
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${window.location.host}/ws/alerts`;
 }

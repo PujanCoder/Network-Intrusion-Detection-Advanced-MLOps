@@ -115,14 +115,24 @@ The batch model is **not** used by the live dashboard. It is exposed read-only t
    └───────────────┬───────────────┘
                    ▼
    ┌───────────────────────────────┐
-   │ FastAPI (src/api/*)           │  REST + /api/ws + static dashboard
+   │ FastAPI (src/serving/app.py)  │  /api/v1/* + /ws/alerts + frontend/dist
+   │ one process, one URL          │  session-cookie auth for browsers
    └───────────────┬───────────────┘
                    ▼
    ┌───────────────────────────────┐
-   │ React dashboard (frontend/)   │  Overview, Stream, Analytics, Attacks,
-   │ 6 pages, live WS updates      │  Model, Explorer, Sensors
+   │ React SOC console (frontend/) │  Overview, Live, Threats, Investigation,
+   │ 7 sections + analytics        │  Sensors, Models, System, Analytics
    └───────────────────────────────┘
 ```
+
+### 3.2 Hosted topology
+
+The deployed service is a **single** FastAPI process (`src.serving.app`) on Render.
+It serves the committed React bundle at `/`, the dashboard API under `/api/v1`,
+the authenticated alert stream at `/ws/alerts`, the CICIDS endpoint
+(`/api/v1/ingest/cic`) and Zeek ingestion (`/api/v1/zeek/*`). `src.api.app` still
+exists as the local/dev variant built on `src.realtime`; it is not deployed and the
+dashboard no longer calls it. Details: `docs/DEPLOY_SERVING.md`.
 
 ### 3.1 Threading model
 
@@ -343,12 +353,26 @@ processing continues.
 
 Loaders for the three public datasets and the training/evaluation procedure (section 8).
 
-### 5.10 `src/api/`
+### 5.10 `src/serving/` (production) and `src/api/` (dev variant)
 
-- `app.py` — `create_app()` builds the FastAPI instance, loads settings and the model, starts
-  the ingestion thread and the metrics ticker in `lifespan`, mounts `frontend/dist` at `/`.
-- `routes.py` — all REST endpoints and `/api/ws`.
-- `predictor.py` — `ModelService`, the only place that talks to the model from the API side.
+`src/serving/` is the deployed application:
+
+- `app.py` — `create_app()`: warms both models, binds the WebSocket hub to the loop,
+  starts Zeek ingestion when enabled, mounts the React bundle and applies cache headers.
+- `soc_store.py` — read-only SQL over `zeek_events`/`zeek_detections`/`detections`:
+  filters, pagination, series, distributions, sensor liveness, per-model counters.
+- `soc.py` — composition: overview payload, model cards, sensors, system status, and
+  `broadcast_detection()` which pushes a stored detection to every dashboard.
+- `routes/soc.py` — `/api/v1/metrics/*`, `/api/v1/detections*`, `/api/v1/sensors`,
+  `/api/v1/models/status`, `/api/v1/system/status`, `WS /ws/alerts`.
+- `routes/auth_routes.py` — `/api/v1/session` (login/logout/state) with throttling.
+- `security.py` — API-key check, HMAC session tokens, cookie policy, 401/503 contracts.
+- `ws.py` — bounded fan-out hub; `publish_threadsafe()` for worker threads.
+- `status.py`, `predictor.py`, `zeek_predictor.py`, `zeek_store.py`, `db.py` — health
+  composition and the two scoring paths.
+
+`src/api/` remains the alternative stack (own SQLite schema in `src/realtime/store.py`,
+detector rules, `/api/ws`). Useful for local experimentation; not the deployment.
 
 ### 5.11 `frontend/`
 
@@ -356,8 +380,14 @@ React 19 + TypeScript + Vite + Recharts, hash routing, dark SOC-style theme.
 
 | Page | Route | Content |
 |---|---|---|
-| Overview | `/` | KPI tiles, sensor card, model card, traffic mix, 15-minute rate chart, latest predictions |
-| Live stream | `/stream` | auto-updating prediction table with severity colouring, pause control, row → detail drawer |
+| Security overview | `/` | totals, rates, model/sensor status, 7 charts, recent detections |
+| Live monitoring | `/live` | WebSocket stream with polling fallback, pause/clear, connection facts |
+| Threat detection | `/threats` | attacks only, severity bands, model/label filters, distribution |
+| Detection investigation | `/investigate` | search, severity/model/status/time filters, pagination, CSV export |
+| Network sensors | `/sensors` | per-sensor counters, timestamp-based liveness, expected config |
+| Model monitoring | `/models` | both models side by side, schemas, runtime counters, severity policy |
+| System health | `/system` | components, database, build commit, WebSocket, endpoints |
+| Traffic analytics | `/analytics` | 24 h volume, protocols, top talkers, confidence histogram |
 | Traffic analytics | `/analytics` | rates, volume, benign/suspicious mix, attack distribution, protocol mix, severity, top sources/destinations, confidence histogram |
 | Attack monitoring | `/attacks` | ML attacks plus HIGH/CRITICAL rule alerts, severity filter, evidence panel |
 | Model monitoring | `/model` | live model card, evaluation table, confusion matrix, feature schema, permutation importance, runtime behaviour |
@@ -396,34 +426,57 @@ Latency is measured, not estimated: `latency_ms` is the wall time of the model c
 
 ## 7. API architecture
 
-Base path `/api`. All responses are JSON except the CSV export.
+Base path `/api/v1` on the deployed app (`src.serving`). JSON everywhere except the CSV
+export. Health endpoints are public; every data endpoint requires an API key or a
+dashboard session (section 7.2).
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | liveness, version, uptime, DB integrity, ingestion flags |
-| GET | `/api/overview` | KPI counters, rolling rates, model card summary, sensor state, WebSocket stats, `no_new_events` flag |
-| GET | `/api/events` | paginated events with `search`, `proto`, `prediction`, `severity`, `start`, `end`, `malicious_only` |
-| GET | `/api/events/export.csv` | same filters, streamed CSV (25 columns) |
-| GET | `/api/events/{id}` | single event with prediction, alerts and original Zeek JSON |
-| GET | `/api/attacks` | ML attacks and HIGH/CRITICAL rule alerts, severity + time filters |
-| GET | `/api/analytics` | time series, distributions, top talkers, confidence histogram |
-| GET | `/api/model` | `live_model` (Zeek) and `batch_model` (CICIDS2017) kept separate, plus runtime counters |
-| GET | `/api/detections` | rule hit counts per rule and the detector catalogue |
-| GET | `/api/sensors` | sensor block, ingestion offsets, DB/API/WS status, processing delay, dead letters |
-| WS | `/api/ws` | live stream: `hello`, `event`, `metrics`, `ping` |
+| GET | `/api/v1/health` | components, build commit, DB integrity, both models, auth state |
+| GET | `/api/v1/ready` | readiness for the deployed mode (503 with reasons otherwise) |
+| GET | `/api/v1/metrics/overview` | totals, detection rate, rates, series, distributions, sensors, models, recent |
+| GET | `/api/v1/metrics/live` | recent detections + explicit `no_new_events` verdict |
+| GET | `/api/v1/detections` | filters (`source/label/severity/status/sensor/model/q/start/end`), `limit` 1–200, `offset`, `sort` |
+| GET | `/api/v1/detections/export` | same filters, streamed CSV (24 columns) |
+| GET | `/api/v1/detections/{id}` | `zeek:12` / `cicids:7`, full record, probabilities, original JSON |
+| GET | `/api/v1/sensors` | per-sensor counters and liveness from `last_ingested_at` |
+| GET | `/api/v1/models/status` | both models: schema, classes, runtime counts, latency policy |
+| GET | `/api/v1/system/status` | composed health + database + WebSocket + build + endpoints |
+| GET/POST/DELETE | `/api/v1/session` | session state, login (sets cookie), logout |
+| WS | `/ws/alerts` | `hello` with the overview, then one `event` per stored detection |
+| POST | `/api/v1/zeek/ingest/records`, `/api/v1/zeek/ingest/events` | sensor push (normalise → dedupe → score → broadcast) |
+| POST | `/api/v1/ingest/cic` | CICIDS flow scoring (header auth only) |
 
-WebSocket contract:
+### 7.1 Detection record
+
+Every row the dashboard renders, from either model, has one shape:
 
 ```jsonc
-// on connect
-{"type": "hello", "server_time": 1795762162.1, "model": {...}, "sensor": {...}}
-// per processed event (from the ingestion thread)
-{"type": "event", "event": {"id": 812, "ts": ..., "src_ip": "...", "prediction": "DoS",
-                            "confidence": 0.98, "severity": "CRITICAL", "alerts": [...],
-                            "raw": {...}}}
-// once per second, DB-derived
-{"type": "metrics", "overview": {"total_events": 812, "events_per_second": 1.9, ...}}
+{"id": "zeek:12", "source": "zeek", "ts": "2026-11-28T13:19:24+00:00",
+ "sensor_id": "e2e-sensor", "src_ip": "...", "src_port": 51515,
+ "dst_ip": "...", "dst_port": 22, "proto": "tcp", "service": "ssh", "conn_state": "SF",
+ "label": "Other", "is_attack": true, "confidence": 0.85, "status": "scored",
+ "severity": "HIGH", "severity_source": "rule:confidence-band-v1",
+ "model": {"name": "zeek-conn-v1", "schema": "zeek_conn_v1", "experimental": true},
+ "explanation": "zeek-conn-v1 scored this conn record as Other; confidence 0.850"}
 ```
+
+`severity` is the only derived field: a documented band over confidence
+(`CRITICAL ≥ 0.90`, `HIGH ≥ 0.75`, `MEDIUM ≥ 0.50`, else `LOW`; scored non-attacks are
+`INFO`; unscored records stay `UNKNOWN`). `severity_source` travels with every record so
+nobody mistakes the rule for model output.
+
+### 7.2 Authentication
+
+- `X-API-Key` for machines (sensors, curl, CI).
+- `POST /api/v1/session` exchanges the key for `ndr_session`, an HMAC-signed token in an
+  `HttpOnly`, `SameSite=Lax` cookie; browsers never hold the key. Session tokens are
+  signed with `NDR_SESSION_SECRET` or a key derived from the API key, and expire.
+- Cookies authorise reads only; ingestion is header-authenticated, which removes the
+  CSRF surface for writes.
+- `/ws/alerts` accepts the cookie (same-origin handshake) or `?api_key=` for scripts;
+  anything else closes with code `1008`.
+- No configured key ⇒ data endpoints return `503 auth_not_configured` with remediation.
 
 ---
 
@@ -523,12 +576,13 @@ model card and error samples described above.
 ```bash
 python -m pip install -r requirements.txt
 cd frontend && npm ci && npm run build && cd ..
-PYTHONPATH=$PWD python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000
-# or: ./scripts/run_api.sh
+NDR_API_KEY=dev-key PYTHONPATH=$PWD python -m uvicorn src.serving.app:app --host 0.0.0.0 --port 8000
 ```
 
-Open <http://localhost:8000>. The dashboard is served from `frontend/dist`; the API lives
-under `/api`.
+Open <http://localhost:8000>, sign in with `dev-key`. The React console is served from
+`frontend/dist` and the API lives under `/api/v1`. The dev variant
+(`PYTHONPATH=$PWD python -m uvicorn src.api.app:app`) still runs on `/api` with its own
+database and is useful for experimenting with the detector rules.
 
 ### 10.2 Frontend development
 

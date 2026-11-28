@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from src.serving.predictor import predictor_state
-from src.serving.security import auth_summary
+from src.serving.security import auth_summary, session_summary
 from src.serving.zeek_predictor import zeek_model_state
 
 APP_NAME = "nids-serving"
@@ -97,6 +97,7 @@ def health_payload(state: Any) -> dict[str, Any]:
         "build": build_info(),
         "components": {
             "auth": auth_summary(settings),
+            "session": session_summary(settings),
             "cicids_model": cicids,
             "zeek_model": zeek,
             "database": database,

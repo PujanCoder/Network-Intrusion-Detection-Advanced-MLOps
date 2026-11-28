@@ -17,7 +17,7 @@ services:
     branch: feature/realtime-ndr-platform
     dockerfilePath: ./deploy/Dockerfile.serving
     dockerContext: .
-    healthCheckPath: /api/health
+    healthCheckPath: /api/v1/health
     autoDeploy: true
     disk:
       name: ndr-data

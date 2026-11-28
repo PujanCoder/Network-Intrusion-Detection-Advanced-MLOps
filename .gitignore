@@ -260,7 +260,14 @@ mlruns/
 
 # Frontend dependencies and build output (built in CI / by scripts/run_api.sh)
 frontend/node_modules/
-frontend/dist/
+# The React bundle is committed: the hosted build command (Render -> Settings) is
+# fixed to `pip install` + artefact checks, so the service serves this directory
+# straight from the clone. Rebuild and commit after any frontend change:
+#   cd frontend && npm run build   (deterministic; dist must be committed)
+# The generic `dist/` rule above is for Python packaging. Re-include the dashboard
+# bundle explicitly: git only descends into a re-included directory.
+!frontend/dist/
+!frontend/dist/**
 # Force-track project source folders and tests
 !src/serving/
 !src/serving/**
