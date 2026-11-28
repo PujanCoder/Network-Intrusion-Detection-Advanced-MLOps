@@ -67,6 +67,24 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
 - `.gitignore` has a Python-oriented `lib/` rule. `frontend/src/lib/` (the dashboard's shared
   API/types/format modules) is force-tracked at the bottom of `.gitignore`; if those modules
   ever go missing from a checkout, check that rule first.
+- The delivered serving app is `src.serving` (`render.serving.yaml`), not `src.api`:
+  Render only clones git, so its CICIDS artefacts must be fetched during the build with
+  `python scripts/fetch_models.py` (DVC + `DAGSHUB_USER_TOKEN`, or `MODEL_ARTIFACTS_URL`).
+  The script is non-fatal by design; `--strict` fails a build instead. `dvc push` in
+  `.github/workflows/publish-artifacts.yml` is what puts the artefacts in the remote.
+- The DagsHub remote is the HTTPS `.dvc` endpoint, so it uses basic auth (`auth`/`user`/
+  `password`). S3 options in `.dvc/config.local` make DVC refuse to start with
+  `extra keys not allowed`; `scripts/dvc_remote.py --fix` strips them and
+  `scripts/fetch_models.py` runs that repair before every pull.
+- Publishing is `python scripts/dvc_publish.py`: it repairs the config, verifies both
+  artefacts through `src.serving.predictor`, locks them (commit or surgical relock),
+  pushes and verifies with `dvc status -c` + an authenticated HEAD per object.
+  It re-locks `dvc.lock` when the local artefacts differ from the recorded hashes;
+  that change must be committed and pushed or the deploy resolves old objects.
+- Run `python scripts/check_dvc_deps.py` before any `dvc commit`/`dvc push`: DVC aborts on the
+  first declared dependency that is absent, which is usually a stale or partial checkout, not a
+  missing feature. The checker sorts deps into missing *source* (blocking: `git pull`),
+  not-yet-built *output*, and DVC-tracked *input* (`dvc pull`).
 - Batch artefacts are DVC-tracked (DagsHub HTTP remote). `tests/test_feature_contract.py`
   skips when `models/best_model.joblib` / `models/preprocessor.joblib` are absent; set
   `NDR_REQUIRE_ARTIFACTS=1` to turn that into a failure. Run `dvc pull` first.

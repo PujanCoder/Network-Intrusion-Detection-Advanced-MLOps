@@ -1,0 +1,67 @@
+name: publish-artifacts
+
+# Publishes the DVC-tracked CICIDS artefacts to the DagsHub remote.
+#
+# The Render service pulls models/best_model.joblib and models/preprocessor.joblib
+# from that remote during its build. Those files are gitignored DVC outputs, so
+# they only reach the remote when something pushes them.
+#
+# Everything happens in scripts/dvc_publish.py: repair the remote config, verify
+# the artefacts load with the serving code, commit/lock them to what is on disk,
+# push, then prove the objects are retrievable. The upload is never assumed to
+# have worked: the job fails if the verification step fails.
+#
+# Required secret: DAGSHUB_TOKEN (DagsHub -> Settings -> Tokens, repo write).
+# Optional secret: RENDER_DEPLOY_HOOK_URL, to redeploy the service afterwards.
+
+on:
+  workflow_dispatch:
+    inputs:
+      retrain:
+        description: "Train first instead of publishing existing outputs"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      DAGSHUB_USER_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+      DAGSHUB_USERNAME: ${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check remote configuration
+        run: python scripts/dvc_remote.py --fix
+
+      - name: Fetch the raw dataset
+        if: inputs.retrain
+        run: python -m dvc pull -r origin data/raw/MachineLearningCSV.dvc
+
+      - name: Train and evaluate
+        if: inputs.retrain
+        run: python -m src.pipelines.pipeline
+
+      - name: Publish and verify the artefacts
+        run: python scripts/dvc_publish.py
+
+      - name: Trigger the Render deployment
+        if: env.RENDER_DEPLOY_HOOK_URL != ''
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"

@@ -81,6 +81,18 @@ def test_health_is_public_and_reports_real_component_state():
     assert body["status"] in {"ok", "degraded"}
 
 
+def test_health_reports_the_deployed_commit(monkeypatch):
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "34ebf60deadbeef")
+    monkeypatch.setenv("RENDER_GIT_BRANCH", "feature/realtime-ndr-platform")
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+
+    with client() as c:
+        body = c.get("/api/v1/health").json()
+
+    assert body["build"]["commit"] == "34ebf60deadbeef"
+    assert body["build"]["branch"] == "feature/realtime-ndr-platform"
+
+
 def test_data_endpoints_fail_closed_with_actionable_code():
     with client() as c:
         for path in ("/api/v1/zeek/status", "/api/v1/zeek/events", "/api/v1/zeek/detections"):
