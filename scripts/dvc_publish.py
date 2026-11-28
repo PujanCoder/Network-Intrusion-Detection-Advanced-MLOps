@@ -347,11 +347,36 @@ def publish(
     return report
 
 
+def lock_needs_commit() -> bool | None:
+    """True when dvc.lock differs from HEAD - the deploy reads the committed lock.
+
+    A re-lock rewrites hashes locally; unless the file is pushed, Render resolves
+    the *previous* objects and downloads artefacts that are not what was published.
+    """
+
+    if not (ROOT / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", "dvc.lock"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return bool(result.stdout.strip())
+
+
 def print_report(report: dict[str, object]) -> None:
     for item in report["steps"]:  # type: ignore[index]
         detail = f" - {item['detail']}" if item.get("detail") else ""
         print(f"[{item['outcome']:<9}] {item['step']}{detail}")
     print("RESULT: " + ("published and verified" if report["ok"] else f"stopped (exit {report['exit_code']})"))
+    if report["ok"] and lock_needs_commit():
+        print("NEXT: dvc.lock changed - commit and push it, or the next build pulls the previous hashes.")
 
 
 def main(argv: list[str] | None = None) -> int:

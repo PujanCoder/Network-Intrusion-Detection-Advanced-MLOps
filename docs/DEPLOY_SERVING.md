@@ -95,6 +95,10 @@ DAGSHUB_USER_TOKEN=<token with repo write scope> python scripts/dvc_publish.py
 Exit codes: `0` published and verified, `2` credentials/config, `3` artefacts
 unusable or a dependency missing, `4` commit/push failed, `5` verification failed.
 
+When the step re-locks `dvc.lock` (because the artefacts on disk differ from the
+recorded hashes) it prints `NEXT: dvc.lock changed` — commit and push the lock, or
+the next build resolves the previous, unpublished objects.
+
 The same step runs in the `publish-artifacts` workflow (Actions →
 publish-artifacts → Run workflow), which can optionally retrain first and then
 POST `RENDER_DEPLOY_HOOK_URL` so the new artefacts reach the service without a

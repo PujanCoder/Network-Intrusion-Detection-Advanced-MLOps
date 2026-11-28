@@ -246,6 +246,27 @@ def test_head_verification_rejects_a_size_mismatch_and_a_missing_object(publishe
     assert "404" in detail
 
 
+def test_uncommitted_lock_is_flagged_after_a_successful_publish(publisher, repo, capsys):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=repo, check=True
+    )
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"], cwd=repo, check=True
+    )
+    model_path, preprocessor_path = write_artifacts(repo)
+
+    assert publisher.lock_needs_commit() is False
+
+    publisher.relock((model_path, preprocessor_path))
+
+    assert publisher.lock_needs_commit() is True
+    publisher.print_report({"ok": True, "exit_code": 0, "steps": []})
+    assert "NEXT: dvc.lock changed" in capsys.readouterr().out
+
+
 def test_report_is_json_serialisable(publisher, repo, capsys):
     write_artifacts(repo)
 

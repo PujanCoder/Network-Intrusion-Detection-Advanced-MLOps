@@ -79,6 +79,8 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
 - Publishing is `python scripts/dvc_publish.py`: it repairs the config, verifies both
   artefacts through `src.serving.predictor`, locks them (commit or surgical relock),
   pushes and verifies with `dvc status -c` + an authenticated HEAD per object.
+  It re-locks `dvc.lock` when the local artefacts differ from the recorded hashes;
+  that change must be committed and pushed or the deploy resolves old objects.
 - Run `python scripts/check_dvc_deps.py` before any `dvc commit`/`dvc push`: DVC aborts on the
   first declared dependency that is absent, which is usually a stale or partial checkout, not a
   missing feature. The checker sorts deps into missing *source* (blocking: `git pull`),
