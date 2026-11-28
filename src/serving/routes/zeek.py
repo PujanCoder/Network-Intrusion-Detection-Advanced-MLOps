@@ -11,6 +11,7 @@ from src.ingestion.zeek.normalizers.base import normalize_record
 from src.ingestion.zeek.schema import ZeekEventEnvelope
 from src.ingestion.zeek.service import ZeekIngestionService
 from src.serving.security import require_key
+from src.serving.soc import broadcast_detection
 from src.serving.status import ingestion_state
 from src.serving.zeek_predictor import predict_zeek_event, zeek_model_state
 
@@ -33,11 +34,12 @@ class ZeekRecordsBatch(BaseModel):
     log_type: str | None = Field(default=None, description="Zeek log type; auto-detected when omitted")
 
 
-def _score(store: Any, event: dict[str, Any]) -> dict[str, Any]:
-    """Score one stored event and persist the detection row."""
+def _score(state: Any, event: dict[str, Any]) -> dict[str, Any]:
+    """Score one stored event, persist the detection row and push it to the dashboards."""
 
     prediction = predict_zeek_event(event)
-    store.insert_detection(event, prediction)
+    det_id = state.zeek_store.insert_detection(event, prediction)
+    broadcast_detection(state, "zeek", det_id)
     return prediction
 
 
@@ -131,7 +133,7 @@ def ingest_events(
             event = env.model_dump()
             if store.insert_event(event):
                 inserted += 1
-                prediction = _score(store, event)
+                prediction = _score(request.app.state, event)
                 if prediction.get("status") == "scored":
                     scored += 1
                 else:
@@ -181,7 +183,7 @@ def ingest_records(
             event = env.model_dump()
             if store.insert_event(event):
                 counts["inserted"] += 1
-                prediction = _score(store, event)
+                prediction = _score(request.app.state, event)
                 counts["scored" if prediction.get("status") == "scored" else "unclassified"] += 1
             else:
                 counts["duplicate"] += 1

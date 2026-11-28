@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from src.serving.predictor import PredictorUnavailable, get_predictor
 from src.serving.security import require_key
+from src.serving.soc import broadcast_detection
 from src.serving.status import health_payload, readiness
 
 log = logging.getLogger(__name__)
@@ -62,27 +63,17 @@ async def ingest(
         ) from exc
 
     store = request.app.state.store
-    hub = request.app.state.hub
 
     preds = []
     for flow in batch.flows:
         pred = predictor.predict(flow)
+        det_id = 0
         try:
-            store.insert(flow, pred)
+            det_id = store.insert(flow, pred)
         except Exception:
             log.exception("store.insert failed")
 
         preds.append(pred)
-
-        if pred["is_attack"]:
-            try:
-                await hub.broadcast({
-                    "type": "alert",
-                    "flow": {k: flow.get(k) for k in
-                             ("src_ip", "dst_ip", "src_port", "dst_port", "protocol")},
-                    "prediction": pred,
-                })
-            except Exception:
-                log.exception("hub.broadcast failed")
+        broadcast_detection(request.app.state, "cicids", det_id)
 
     return {"accepted": len(preds), "predictions": preds}

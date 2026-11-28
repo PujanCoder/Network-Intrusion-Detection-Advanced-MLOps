@@ -11,6 +11,8 @@ They pin the behaviour that was broken in production:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -267,8 +269,15 @@ def test_ready_when_zeek_model_is_available():
 
 
 def test_dashboard_is_served():
+    """The root serves the React SOC dashboard when the bundle is committed, and the
+    built-in status page otherwise. Both are real pages, neither is a placeholder."""
+
     with client() as c:
         response = c.get("/")
     assert response.status_code == 200
-    assert "api/v1/health" in response.text
-    assert "Zeek Status" in response.text
+    bundle = Path(__file__).resolve().parents[1] / "frontend" / "dist" / "index.html"
+    if bundle.is_file():
+        assert '<div id="root">' in response.text
+    else:
+        assert "api/v1/health" in response.text
+        assert "Zeek Status" in response.text

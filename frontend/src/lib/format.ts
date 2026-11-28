@@ -1,4 +1,4 @@
-import type { NetworkEvent } from "./api";
+import type { Severity } from "./api";
 
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
 
@@ -20,23 +20,24 @@ function pad(value: number): string {
   return value.toString().padStart(2, "0");
 }
 
-export function formatTime(ts: number | null | undefined): string {
-  if (ts === null || ts === undefined || Number.isNaN(ts)) return "—";
-  const date = new Date(ts * 1000);
+export function parseTs(value: string | number | null | undefined): Date | null {
+  if (value === null || value === undefined || value === "") return null;
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function formatTime(value: string | number | null | undefined): string {
+  const date = parseTs(value);
+  if (!date) return "—";
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-export function formatDateTime(ts: number | null | undefined): string {
-  if (ts === null || ts === undefined || Number.isNaN(ts)) return "—";
-  const date = new Date(ts * 1000);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
-export function toIsoLocal(date: Date): string {
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+export function formatDateTime(value: string | number | null | undefined): string {
+  const date = parseTs(value);
+  if (!date) return "—";
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(
+    date.getMinutes(),
+  )}:${pad(date.getSeconds())}`;
 }
 
 export function relativeSeconds(seconds: number | null | undefined): string {
@@ -45,10 +46,26 @@ export function relativeSeconds(seconds: number | null | undefined): string {
   if (total < 1) return "just now";
   if (total < 60) return `${total}s ago`;
   if (total < 3600) return `${Math.floor(total / 60)}m ${total % 60}s ago`;
-  return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m ago`;
+  if (total < 86400) return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m ago`;
+  return `${Math.floor(total / 86400)}d ago`;
 }
 
-export function severityClass(severity: string | null | undefined): string {
+export function secondsSince(value: string | number | null | undefined): number | null {
+  const date = parseTs(value);
+  if (!date) return null;
+  return Math.max(0, (Date.now() - date.getTime()) / 1000);
+}
+
+export function relativeFrom(value: string | number | null | undefined): string {
+  return relativeSeconds(secondsSince(value));
+}
+
+export function confidence(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+export function severityTone(severity: Severity | string | null | undefined): string {
   switch ((severity ?? "").toUpperCase()) {
     case "CRITICAL":
       return "sev-critical";
@@ -65,8 +82,14 @@ export function severityClass(severity: string | null | undefined): string {
   }
 }
 
-export function predictionClass(event: NetworkEvent): string {
-  if (event.is_malicious) return "pred-attack";
-  if (event.prediction) return "pred-benign";
-  return "pred-unclassified";
+export function toLocalInput(date: Date): string {
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+export function duration(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  if (value < 1) return `${(value * 1000).toFixed(0)} ms`;
+  if (value < 60) return `${value.toFixed(2)} s`;
+  return `${(value / 60).toFixed(1)} min`;
 }

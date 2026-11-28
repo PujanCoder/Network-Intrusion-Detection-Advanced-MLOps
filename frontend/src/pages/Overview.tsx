@@ -1,211 +1,155 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useState } from "react";
 
-import { DonutChart, RateChart } from "../components/Charts";
-import { EventTable, useMergedEvents } from "../components/EventTable";
-import { EventDrawer } from "../components/EventDrawer";
-import { EmptyState, Panel, Pill, StatCard } from "../components/ui";
-import type { Analytics, NetworkEvent } from "../lib/api";
-import { getJson } from "../lib/api";
-import { useLive } from "../lib/LiveContext";
-import { formatDateTime, formatNumber, relativeSeconds } from "../lib/format";
+import {
+  DonutChart,
+  EventsOverTimeChart,
+  HistogramChart,
+  TopIpsChart,
+  TrafficVolumeChart,
+} from "../components/Charts";
+import { DetectionDrawer } from "../components/EventDrawer";
+import { DetectionTable } from "../components/EventTable";
+import { ErrorBox, Loading, NoEventsNotice, Panel, Pill, StatCard } from "../components/ui";
+import { api } from "../lib/api";
+import { confidence, formatNumber, relativeSeconds } from "../lib/format";
 import { usePolled } from "../lib/usePolled";
 
+const WINDOWS = [
+  { label: "15 min", value: 900 },
+  { label: "1 hour", value: 3600 },
+  { label: "6 hours", value: 21600 },
+  { label: "24 hours", value: 86400 },
+];
+
 export function OverviewPage() {
-  const live = useLive();
-  const [selected, setSelected] = useState<NetworkEvent | null>(null);
-  const analytics = usePolled<Analytics>(() => getJson<Analytics>("/api/analytics?window=900"), 5000);
-  const recent = usePolled<{ items: NetworkEvent[] }>(() => getJson<{ items: NetworkEvent[] }>("/api/events?limit=12"), 8000);
+  const [windowS, setWindowS] = useState(3600);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const { data, error, loading } = usePolled(() => api.overview(windowS), 3000, [windowS]);
 
-  const overview = live.overview;
-  const merged = useMergedEvents(live.events, recent.data?.items ?? [], 12);
-
-  const trafficMix = useMemo(() => {
-    if (!overview) return [];
-    return [
-      { label: "Benign", count: overview.benign },
-      { label: "Attacks", count: overview.attacks },
-      { label: "Suspicious", count: overview.suspicious },
-      { label: "Unclassified", count: overview.unclassified },
-    ];
-  }, [overview]);
-
-  const idle = overview?.no_new_events ?? true;
-  const zeekCapturing =
-    (live.overview?.sensor?.log_dir_exists ?? false) && (live.overview?.sensor?.log_file_count ?? 0) > 0;
-  const remoteIngest = overview?.sensor?.remote_ingest_enabled ?? false;
-  const ingestionLabel = overview?.sensor?.ingestion_running
-    ? "ingestion running"
-    : remoteIngest
-      ? "remote ingestion ready"
-      : "ingestion stopped";
-  const ingestionOk = (overview?.sensor?.ingestion_running ?? false) || remoteIngest;
-  const captureLabel = zeekCapturing ? "capture active" : remoteIngest ? "remote sensor" : "no log files";
+  if (loading && !data) return <Loading label="Loading overview" />;
 
   return (
     <>
-      {(overview?.sensor?.replay_records ?? 0) > 0 && (
-        <div className="banner">
-          <strong>Replay data detected.</strong>
-          <span>
-            {formatNumber(overview?.sensor?.replay_records)} events came from the held-out replay harness,
-            not a live capture interface. Start Zeek with scripts/zeek_live.sh for live traffic.
-          </span>
-        </div>
-      )}
+      <ErrorBox error={error} />
+      {data && (
+        <>
+          {data.activity.no_new_events && <NoEventsNotice message="No new network events received." />}
 
-      {idle && (
-        <div className="banner">
-          <strong>No new network events received.</strong>
-          <span>
-            The sensor is {live.connected ? "connected" : "reconnecting"} and ingestion is
-            {" "}
-            {overview?.sensor?.ingestion_running ? "running" : remoteIngest ? "waiting for sensor pushes" : "stopped"}. Last event{" "}
-            {relativeSeconds(overview?.seconds_since_last_event)}. Nothing is fabricated while the
-            network is quiet.
-          </span>
-        </div>
-      )}
-
-      <div className="grid cols-4">
-        <StatCard
-          label="Total network events"
-          value={formatNumber(overview?.total_events)}
-          foot={`${formatNumber(overview?.total_predictions)} predictions · ${formatNumber(overview?.unclassified)} unclassified`}
-          accent="cyan"
-        />
-        <StatCard
-          label="Events / second"
-          value={overview ? (overview.events_per_second_live ?? overview.events_per_second).toFixed(2) : "—"}
-          foot={`${overview?.burst_window_s ?? 10}s window · ${overview?.events_per_second.toFixed(2) ?? "—"}/s over ${overview?.window_s ?? 300}s`}
-          accent="violet"
-        />
-        <StatCard
-          label="Predictions / second"
-          value={overview ? (overview.predictions_per_second_live ?? overview.predictions_per_second).toFixed(2) : "—"}
-          foot={`avg inference ${overview?.avg_prediction_latency_ms?.toFixed(2) ?? "—"} ms`}
-          accent="violet"
-        />
-        <StatCard
-          label="Detected attacks"
-          value={formatNumber(overview?.attacks)}
-          foot={`${formatNumber(overview?.suspicious)} suspicious · ${formatNumber(overview?.critical_alerts)} critical alerts`}
-          accent="red"
-        />
-      </div>
-
-      <div className="grid cols-4">
-        <StatCard label="Benign events" value={formatNumber(overview?.benign)} accent="green" />
-        <StatCard label="Suspicious events" value={formatNumber(overview?.suspicious)} accent="amber" />
-        <StatCard label="Unclassified" value={formatNumber(overview?.unclassified)} accent="orange" />
-        <StatCard
-          label="Critical detections"
-          value={formatNumber(overview?.critical_detections ?? overview?.critical_alerts)}
-          foot={`${formatNumber(overview?.critical_alerts)} critical rule alerts · ${formatNumber(overview?.total_alerts)} alerts total`}
-          accent="red"
-        />
-      </div>
-
-      <div className="grid cols-3">
-        <Panel title="Sensor" hint="Zeek capture">
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-            <Pill text={captureLabel} tone={zeekCapturing || remoteIngest ? "ok" : "warn"} />
-            <Pill text={overview?.sensor?.mode ?? "unknown"} tone="info" />
-            <Pill text={ingestionLabel} tone={ingestionOk ? "ok" : "bad"} />
+          <div className="toolbar">
+            <div className="toolbar-group">
+              <span className="toolbar-label">window</span>
+              {WINDOWS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`chip-button ${windowS === option.value ? "active" : ""}`}
+                  onClick={() => setWindowS(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div className="toolbar-group">
+              <span className="muted tiny">
+                updated {relativeSeconds((Date.now() - data.server_time * 1000) / 1000)} · bucket {data.bucket_s}s
+              </span>
+            </div>
           </div>
-          <dl className="kv">
-            <dt>Sensor ID</dt>
-            <dd className="mono">{overview?.sensor?.sensor_id ?? "—"}</dd>
-            <dt>Log directory</dt>
-            <dd className="mono">
-              {live.overview?.sensor?.log_dir_exists ? "present" : remoteIngest ? "remote push" : "missing"}
-            </dd>
-            <dt>Log files</dt>
-            <dd className="mono">{formatNumber(overview?.sensor?.log_file_count ?? 0)}</dd>
-            <dt>Last event</dt>
-            <dd className="mono">{formatDateTime(overview?.last_event_ts)}</dd>
-            <dt>Seconds since</dt>
-            <dd className="mono">{overview?.seconds_since_last_event ?? "—"}</dd>
-            <dt>Sensor error</dt>
-            <dd className="mono">{overview?.sensor?.last_error ?? "none"}</dd>
-          </dl>
-        </Panel>
 
-        <Panel title="Current model" hint="Live classifier">
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-            <Pill
-              text={overview?.model?.loaded ? "model loaded" : "model unavailable"}
-              tone={overview?.model?.loaded ? "ok" : "bad"}
+          <div className="stat-grid">
+            <StatCard
+              label="Network events"
+              value={formatNumber(data.totals.events)}
+              foot={`${data.rates.events_per_second.toFixed(3)}/s over last ${data.rates.window_s / 60} min`}
             />
-            <Pill text={`threshold ${overview?.model?.threshold ?? "—"}`} tone="info" />
+            <StatCard label="Scored records" value={formatNumber(data.totals.scored)} accent="violet" foot="model produced a label" />
+            <StatCard
+              label="Detected attacks"
+              value={formatNumber(data.totals.attacks)}
+              accent="red"
+              foot={`${data.rates.attacks_per_second.toFixed(3)} attacks/s`}
+            />
+            <StatCard label="Benign" value={formatNumber(data.totals.benign)} accent="green" foot="classified as BENIGN" />
+            <StatCard
+              label="Unclassified"
+              value={formatNumber(data.totals.unclassified)}
+              accent="amber"
+              foot="model could not score the record"
+            />
+            <StatCard
+              label="Detection rate"
+              value={data.totals.detection_rate === null ? "—" : `${(data.totals.detection_rate * 100).toFixed(1)}%`}
+              accent="orange"
+              foot="attacks / scored records"
+            />
+            <StatCard
+              label="Sensors online"
+              value={`${data.sensors.online}/${data.sensors.total}`}
+              accent={data.sensors.online > 0 ? "green" : "amber"}
+              foot={`silent threshold ${data.sensors.stale_after_s}s`}
+            />
+            <StatCard label="Dead letters" value={formatNumber(data.totals.dead_letters)} accent="amber" foot="unparsable records" />
           </div>
-          <dl className="kv">
-            <dt>Name</dt>
-            <dd className="mono">{overview?.model?.name ?? "—"}</dd>
-            <dt>Version</dt>
-            <dd className="mono">{overview?.model?.version ?? "—"}</dd>
-            <dt>Trained</dt>
-            <dd className="mono">{overview?.model?.trained_at ?? "—"}</dd>
-            <dt>Datasets</dt>
-            <dd className="mono">
-              {overview?.model?.training_datasets
-                ? Object.entries(overview.model.training_datasets).map(([name, rows]) => `${name} (${formatNumber(rows)})`).join(", ")
-                : "—"}
-            </dd>
-            <dt>Model errors</dt>
-            <dd className="mono">{formatNumber(overview?.model_errors)}</dd>
-            <dt>Dead letters</dt>
-            <dd className="mono">{formatNumber(overview?.dead_letters)}</dd>
-          </dl>
-        </Panel>
 
-        <Panel title="Traffic mix" hint="All processed events">
-          <DonutChart
-            data={trafficMix}
-            colors={["#31d39b", "#ff5b6e", "#f3b23f", "#7c90aa"]}
-            height={220}
-            emptyLabel="No events yet"
-          />
-        </Panel>
-      </div>
+          <div className="grid-2">
+            <Panel
+              title="Events over time"
+              hint={`predictions and attacks per ${data.bucket_s}s bucket`}
+              actions={<Pill text={`${data.window_s / 60} min window`} tone="neutral" />}
+            >
+              <EventsOverTimeChart series={data.series} />
+            </Panel>
+            <Panel title="Benign vs malicious" hint="scored records only; unclassified stay unknown">
+              <DonutChart
+                data={[
+                  { label: "benign", count: data.totals.benign },
+                  { label: "attacks", count: data.totals.attacks },
+                ]}
+                emptyLabel="No scored records yet"
+              />
+            </Panel>
+          </div>
 
-      <Panel
-        title="Network events per second"
-        hint={
-          <>
-            last 15 minutes ·{" "}
-            <Link to="/analytics" style={{ color: "var(--cyan)" }}>
-              full analytics →
-            </Link>
-          </>
-        }
-      >
-        {analytics.error && <div className="error-box">{analytics.error}</div>}
-        <RateChart series={analytics.data?.series ?? []} />
-      </Panel>
+          <div className="grid-3">
+            <Panel title="Severity distribution" hint="rule bands over model confidence" className="span-1">
+              <DonutChart data={data.distributions.severities} height={150} emptyLabel="No detections yet" />
+            </Panel>
+            <Panel title="Confidence distribution" hint="every scored record, 0.0 – 1.0">
+              <HistogramChart data={data.distributions.confidence} />
+            </Panel>
+            <Panel title="Protocols" hint="from Zeek conn records">
+              <DonutChart data={data.distributions.protocols} height={150} emptyLabel="No protocols yet" />
+            </Panel>
+          </div>
 
-      <Panel
-        title="Latest predictions"
-        hint={
-          <>
-            live WebSocket stream ·{" "}
-            <Link to="/stream" style={{ color: "var(--cyan)" }}>
-              open stream →
-            </Link>
-          </>
-        }
-      >
-        {merged.length ? (
-          <EventTable events={merged} onSelect={setSelected} flashNew={false} />
-        ) : (
-          <EmptyState
-            title="No new network events received."
-            detail="Rows appear automatically when Zeek appends a record to its JSON logs."
-          />
-        )}
-      </Panel>
+          <div className="grid-2">
+            <Panel title="Top source addresses" hint="most frequent client IPs">
+              <TopIpsChart data={data.distributions.top_src_ips} />
+            </Panel>
+            <Panel title="Top destination addresses" hint="most frequent server IPs">
+              <TopIpsChart data={data.distributions.top_dst_ips} color="#8d6bff" />
+            </Panel>
+          </div>
 
-      <EventDrawer event={selected} onClose={() => setSelected(null)} />
+          <Panel title="Traffic volume" hint="bytes derived from Zeek conn records">
+            <TrafficVolumeChart series={data.series} />
+          </Panel>
+
+          <Panel
+            title="Recent security events"
+            hint="latest stored detections; click a row for the full record"
+            actions={
+              <span className="muted tiny">
+                CICIDS loaded: {String(data.models.cicids.loaded)} · highest confidence{" "}
+                {confidence(data.recent[0]?.confidence ?? null)}
+              </span>
+            }
+          >
+            <DetectionTable rows={data.recent} onOpen={setOpenId} dense />
+          </Panel>
+        </>
+      )}
+      <DetectionDrawer id={openId} onClose={() => setOpenId(null)} />
     </>
   );
 }

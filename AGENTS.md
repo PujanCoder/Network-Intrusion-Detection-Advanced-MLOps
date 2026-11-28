@@ -11,16 +11,16 @@ Repository notes for automated agents and contributors.
 ## Commands
 
 ```bash
-# tests (95)
+# tests (201)
 PYTHONPATH=$PWD python -m pytest tests/ -q
 
 # remote-ingestion smoke test against a running API
 NDR_API_KEY=dev-key PYTHONPATH=$PWD python scripts/zeek_forward.py \
     --url http://127.0.0.1:8000 --log /tmp/conn.log --insecure
 
-# backend + built dashboard
+# backend + built dashboard (production app, sign in with the key)
 cd frontend && npm run build && cd ..
-PYTHONPATH=$PWD python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+NDR_API_KEY=dev-key PYTHONPATH=$PWD python -m uvicorn src.serving.app:app --host 0.0.0.0 --port 8000
 
 # frontend type-check / build
 cd frontend && npx tsc --noEmit && npm run build
@@ -35,7 +35,8 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
 ## Deployment
 
 - `render.yaml` is the single hosted-service definition (Docker, health check
-  `/api/health`, disk at `/var/data`). `docs/DEPLOY_RENDER.md` is the operator guide.
+  `/api/v1/health`, disk at `/var/data`). `docs/DEPLOY_RENDER.md` is the operator guide,
+  `docs/DEPLOY_SERVING.md` the production one.
 - The service at `network-intrusion-detection-advanced.onrender.com` runs the **older**
   `src.serving` app (HTML dashboard, `/api/v1/*`), not `src.api`. It is documented in
   `docs/DEPLOY_SERVING.md` with the blueprint `deploy/render.serving.yaml`. Both apps accept
@@ -66,8 +67,23 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
   bytes, and the same objects are also pushed to the DagsHub remote as a fallback.
   `tests/test_committed_artifacts.py` guards the contract (78 features in, 68 to the
   estimator, classes BENIGN/DDoS) using two real CICIDS2017 flows as fixtures.
-- `frontend/dist` and `frontend/node_modules` are gitignored; `scripts/run_api.sh` builds the
-  bundle when it is missing.
+- **`frontend/dist` is committed** (`.gitignore` explains why): the Render build command
+  cannot run Node, so the service serves the bundle straight from the clone. After any
+  frontend change run `cd frontend && npm run build` and commit the regenerated `dist` —
+  the build is deterministic, so no diff means nothing changed. `frontend/node_modules` is
+  still ignored.
+- The production app is `src.serving.app` and it serves everything: `/` (React), `/api/v1/*`,
+  `/ws/alerts`, `/api/v1/ingest/cic`, `/api/v1/zeek/*`. `src.api.app` is the dev variant on
+  `/api`; the dashboard no longer calls it. Don't reintroduce a second deployment.
+- Browser auth is a session cookie, never a key in the bundle: `POST /api/v1/session`
+  verifies `NDR_API_KEY` and returns `ndr_session` (HMAC-signed, HttpOnly, SameSite=Lax,
+  TTL `IDS_SESSION_TTL_S`). Cookies authorise **reads only**; ingestion requires
+  `X-API-Key`, which is what keeps writes out of CSRF reach. `src/serving/security.py`
+  owns this; `tests/test_soc_api.py` pins the contract (401/503/1008, tamper, expiry,
+  throttle).
+- The dashboard is 8 pages (`/#/`, `#/live`, `#/threats`, `#/investigate`, `#/sensors`,
+  `#/models`, `#/system`, `#/analytics`). All numbers come from `/api/v1/*` SQL; the only
+  derived value is `severity`, and every record carries `severity_source` to say so.
 - `.gitignore` has a Python-oriented `lib/` rule. `frontend/src/lib/` (the dashboard's shared
   API/types/format modules) is force-tracked at the bottom of `.gitignore`; if those modules
   ever go missing from a checkout, check that rule first.
@@ -75,8 +91,9 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
   `feature/realtime-ndr-platform`, not `main`; `/api/v1/health` reports the commit it is
   running under `build`. Deploying main means fast-forwarding that branch to the merge
   commit and POSTing `RENDER_DEPLOY_HOOK_URL` (the hook rebuilds whatever the branch holds).
-- `/api/v1/detections` uses the same API key as every other data endpoint; the dashboard
-  page itself is public but its data comes from key-protected calls.
+- `/api/v1/detections` accepts `X-API-Key` or the dashboard session; the React page itself
+  is a static asset, but every datum behind it is authenticated. `detection_id` values are
+  `zeek:<rowid>` / `cicids:<rowid>`.
 - The delivered serving app is `src.serving` (`render.serving.yaml`), not `src.api`:
   Render only clones git, so its CICIDS artefacts must be fetched during the build with
   `python scripts/fetch_models.py` (DVC + `DAGSHUB_USER_TOKEN`, or `MODEL_ARTIFACTS_URL`).

@@ -1,34 +1,32 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { NetworkEvent, Overview } from "../lib/api";
+import type { Detection, Overview } from "../lib/api";
 import { wsUrl } from "../lib/api";
 
 export interface LiveState {
   connected: boolean;
   everConnected: boolean;
   reconnects: number;
-  sensor: { sensor_id: string; mode: string } | null;
-  model: { name: string; version: string; loaded: boolean } | null;
-  overview: Overview | null;
-  events: NetworkEvent[];
+  hello: Overview | null;
+  events: Detection[];
   lastMessageAt: number | null;
   lastEventAt: number | null;
   sessionEvents: number;
   sessionAttacks: number;
+  unauthorized: boolean;
 }
 
 const initialState: LiveState = {
   connected: false,
   everConnected: false,
   reconnects: 0,
-  sensor: null,
-  model: null,
-  overview: null,
+  hello: null,
   events: [],
   lastMessageAt: null,
   lastEventAt: null,
   sessionEvents: 0,
   sessionAttacks: 0,
+  unauthorized: false,
 };
 
 export type LiveStream = LiveState & {
@@ -36,10 +34,18 @@ export type LiveStream = LiveState & {
   clearEvents: () => void;
 };
 
-export function useLiveStream(maxEvents = 400): LiveStream {
+/**
+ * Alert stream over the authenticated WebSocket.
+ *
+ * The browser authenticates with the HttpOnly session cookie, so no key appears
+ * in the URL. Events arrive as `{type: "event", event}` and are de-duplicated by
+ * detection id, which keeps a reconnect from replaying the same rows as new.
+ */
+export function useLiveStream(maxEvents = 500): LiveStream {
   const [state, setState] = useState<LiveState>(initialState);
   const pausedRef = useRef(false);
-  const bufferRef = useRef<NetworkEvent[]>([]);
+  const bufferRef = useRef<Detection[]>([]);
+  const seenRef = useRef<Set<string>>(new Set());
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -58,29 +64,26 @@ export function useLiveStream(maxEvents = 400): LiveStream {
           ...prev,
           connected: true,
           everConnected: true,
+          unauthorized: false,
           reconnects: prev.everConnected ? prev.reconnects + 1 : 0,
         }));
       };
 
       socket.onmessage = (message) => {
-        let payload: any;
+        let payload: { type?: string; event?: Detection; overview?: Overview };
         try {
           payload = JSON.parse(message.data);
         } catch {
           return;
         }
         if (payload.type === "hello") {
-          setState((prev) => ({
-            ...prev,
-            sensor: payload.sensor ?? prev.sensor,
-            model: payload.model ?? prev.model,
-            overview: payload.overview ?? prev.overview,
-            lastMessageAt: Date.now(),
-          }));
+          setState((prev) => ({ ...prev, hello: payload.overview ?? prev.hello, lastMessageAt: Date.now() }));
           return;
         }
         if (payload.type === "event" && payload.event) {
-          const event = payload.event as NetworkEvent;
+          const event = payload.event;
+          if (seenRef.current.has(event.id)) return;
+          seenRef.current.add(event.id);
           bufferRef.current = [event, ...bufferRef.current].slice(0, maxEvents);
           setState((prev) => ({
             ...prev,
@@ -88,34 +91,23 @@ export function useLiveStream(maxEvents = 400): LiveStream {
             lastEventAt: Date.now(),
             lastMessageAt: Date.now(),
             sessionEvents: prev.sessionEvents + 1,
-            sessionAttacks: prev.sessionAttacks + (event.is_malicious ? 1 : 0),
+            sessionAttacks: prev.sessionAttacks + (event.is_attack ? 1 : 0),
           }));
-          return;
-        }
-        if (payload.type === "metrics" && payload.overview) {
-          setState((prev) => ({
-            ...prev,
-            overview: payload.overview,
-            lastMessageAt: Date.now(),
-          }));
-          return;
-        }
-        if (payload.type === "ping") {
-          setState((prev) => ({ ...prev, lastMessageAt: Date.now() }));
         }
       };
 
-      socket.onclose = () => {
+      socket.onclose = (closeEvent) => {
         setState((prev) => ({ ...prev, connected: false }));
         if (disposed) return;
+        if (closeEvent.code === 1008) {
+          setState((prev) => ({ ...prev, unauthorized: true }));
+        }
         attempts += 1;
         const delay = Math.min(8000, 500 * 2 ** Math.min(attempts, 4));
         retryTimer = window.setTimeout(connect, delay);
       };
 
-      socket.onerror = () => {
-        socket.close();
-      };
+      socket.onerror = () => socket.close();
     };
 
     connect();
@@ -127,17 +119,16 @@ export function useLiveStream(maxEvents = 400): LiveStream {
     };
   }, [maxEvents]);
 
-  const setPaused = (paused: boolean) => {
+  const setPaused = useCallback((paused: boolean) => {
     pausedRef.current = paused;
-    if (!paused) {
-      setState((prev) => ({ ...prev, events: bufferRef.current }));
-    }
-  };
+    if (!paused) setState((prev) => ({ ...prev, events: bufferRef.current }));
+  }, []);
 
-  const clearEvents = () => {
+  const clearEvents = useCallback(() => {
     bufferRef.current = [];
+    seenRef.current = new Set();
     setState((prev) => ({ ...prev, events: [] }));
-  };
+  }, []);
 
   return { ...state, setPaused, clearEvents };
 }

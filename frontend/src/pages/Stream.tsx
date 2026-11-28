@@ -1,107 +1,124 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { EventTable, useMergedEvents } from "../components/EventTable";
-import { EventDrawer } from "../components/EventDrawer";
-import { EmptyState, Panel, Pill, StatCard } from "../components/ui";
-import type { NetworkEvent } from "../lib/api";
-import { getJson } from "../lib/api";
+import { DetectionDrawer } from "../components/EventDrawer";
+import { DetectionTable } from "../components/EventTable";
+import { ErrorBox, KeyValue, Loading, NoEventsNotice, Panel, Pill, StatCard } from "../components/ui";
+import { api, type Detection } from "../lib/api";
+import { relativeFrom, relativeSeconds } from "../lib/format";
 import { useLive } from "../lib/LiveContext";
-import { formatNumber, relativeSeconds } from "../lib/format";
 import { usePolled } from "../lib/usePolled";
 
 export function StreamPage() {
   const live = useLive();
-  const [selected, setSelected] = useState<NetworkEvent | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
-  const [onlyMalicious, setOnlyMalicious] = useState(false);
-  const [query, setQuery] = useState("");
-  const initial = usePolled<{ items: NetworkEvent[] }>(() => getJson<{ items: NetworkEvent[] }>("/api/events?limit=150"), 60000);
+  const [feed, setFeed] = useState<Detection[]>([]);
 
-  const merged = useMergedEvents(live.events, initial.data?.items ?? [], 500);
+  const polled = usePolled(() => api.live(100), live.connected ? 15000 : 3000, [live.connected]);
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return merged.filter((event) => {
-      if (onlyMalicious && !event.is_malicious) return false;
-      if (!needle) return true;
-      return [event.src_ip, event.dst_ip, event.prediction, event.proto, event.service, event.explanation]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle));
-    });
-  }, [merged, onlyMalicious, query]);
+  useEffect(() => {
+    setFeed(polled.data?.records ?? []);
+  }, [polled.data]);
 
-  const togglePause = () => {
-    const next = !paused;
-    setPaused(next);
-    live.setPaused(next);
-  };
+  const { setPaused: applyPause } = live;
+  useEffect(() => {
+    applyPause(paused);
+  }, [paused, applyPause]);
 
-  const lastEvent = live.overview?.seconds_since_last_event;
+  const rows = useMemo(() => {
+    const merged = new Map<string, Detection>();
+    for (const record of live.events) merged.set(record.id, record);
+    for (const record of feed) if (!merged.has(record.id)) merged.set(record.id, record);
+    return [...merged.values()].sort((a, b) => (b.ts ?? "").localeCompare(a.ts ?? "")).slice(0, 300);
+  }, [live.events, feed]);
+
+  const attacks = rows.filter((row) => row.is_attack).length;
 
   return (
     <>
-      <div className="grid cols-4">
-        <StatCard label="Session events" value={formatNumber(live.sessionEvents)} accent="cyan" />
-        <StatCard label="Session attacks" value={formatNumber(live.sessionAttacks)} accent="red" />
-        <StatCard label="Stream state" value={paused ? "paused" : live.connected ? "live" : "offline"} accent={live.connected ? "green" : "amber"} small />
+      <ErrorBox error={polled.error} />
+      <div className="stat-grid">
+        <StatCard
+          label="Connection"
+          value={live.connected ? "streaming" : "polling"}
+          accent={live.connected ? "green" : "amber"}
+          foot={`${live.reconnects} reconnect(s)`}
+        />
+        <StatCard label="Rows held" value={rows.length.toLocaleString()} foot="client-side buffer" />
+        <StatCard label="Session events" value={live.sessionEvents.toLocaleString()} accent="violet" foot="received since page load" />
+        <StatCard label="Session attacks" value={live.sessionAttacks.toLocaleString()} accent="red" foot="is_attack = true" />
         <StatCard
           label="Last event"
-          value={relativeSeconds(lastEvent)}
-          foot={`${formatNumber(live.overview?.total_events)} events persisted`}
-          accent="violet"
-          small
+          value={relativeFrom(polled.data?.last_event_ts ?? null)}
+          accent="cyan"
+          foot={polled.data?.no_new_events ? "no events stored yet" : "server timestamp"}
+        />
+        <StatCard
+          label="Last update"
+          value={relativeSeconds(live.lastMessageAt ? (Date.now() - live.lastMessageAt) / 1000 : null)}
+          foot="websocket message or poll"
         />
       </div>
 
-      <Panel
-        title="Prediction stream"
-        hint={
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <Pill text={`${filtered.length} shown`} tone="neutral" />
-            <Pill
-              text={`${formatNumber(live.overview?.unclassified)} unclassified`}
-              tone={(live.overview?.unclassified ?? 0) > 0 ? "warn" : "neutral"}
-            />
-          </div>
-        }
-      >
-        <div className="controls" style={{ marginBottom: 12 }}>
-          <button className={`btn ${paused ? "primary" : ""}`} onClick={togglePause}>
-            {paused ? "Resume stream" : "Pause stream"}
+      {polled.data?.no_new_events && <NoEventsNotice message="No new network events received." />}
+
+      <div className="toolbar">
+        <div className="toolbar-group">
+          <button type="button" className={`chip-button ${paused ? "active" : ""}`} onClick={() => setPaused((value) => !value)}>
+            {paused ? "resume" : "pause"}
           </button>
-          <button className="btn ghost" onClick={() => live.clearEvents()}>
-            Clear buffer
+          <button
+            type="button"
+            className="chip-button"
+            onClick={() => {
+              live.clearEvents();
+              setFeed([]);
+            }}
+          >
+            clear
           </button>
-          <label style={{ display: "inline-flex", gap: 7, alignItems: "center", fontSize: 12.5 }}>
-            <input type="checkbox" checked={onlyMalicious} onChange={(event) => setOnlyMalicious(event.target.checked)} />
-            Attacks only
-          </label>
-          <input
-            className="input"
-            placeholder="Filter visible rows (IP, prediction, protocol…)"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            style={{ minWidth: 300 }}
+        </div>
+        <div className="toolbar-group">
+          <Pill
+            text={live.connected ? "websocket authenticated" : "websocket offline"}
+            tone={live.connected ? "ok" : "warn"}
+            pulse={live.connected}
           />
-          <span className="mono dim" style={{ marginLeft: "auto" }}>
-            {live.connected ? "websocket connected" : "websocket reconnecting"}
-            {live.reconnects > 0 ? ` · ${live.reconnects} reconnect(s)` : ""}
+          <span className="muted tiny">
+            {attacks} of {rows.length} rows are attacks
           </span>
         </div>
+      </div>
 
-        {filtered.length ? (
-          <EventTable events={filtered} onSelect={setSelected} />
-        ) : merged.length ? (
-          <EmptyState title="No rows match the current filters." detail="Clear the filter to see the full stream." />
-        ) : (
-          <EmptyState
-            title="No new network events received."
-            detail="The dashboard never fabricates traffic. Start Zeek capture or replay a PCAP and rows will appear here automatically."
+      <Panel
+        title="Live detection stream"
+        hint={paused ? "paused — buffer continues in the background" : "newest first, no refresh required"}
+        className="flush"
+      >
+        {polled.loading && !rows.length ? <Loading label="Loading stream" /> : (
+          <DetectionTable
+            rows={rows}
+            onOpen={setOpenId}
+            emptyTitle="No new network events received."
+            emptyDetail="Run a sensor or push a Zeek record; rows appear here as they are scored."
           />
         )}
       </Panel>
 
-      <EventDrawer event={selected} onClose={() => setSelected(null)} />
+      <Panel title="Stream health" hint="server-side facts about the feed">
+        <KeyValue
+          rows={[
+            ["WebSocket clients", String(polled.data?.websocket.clients ?? 0)],
+            ["WebSocket available", String(polled.data?.websocket.available ?? false)],
+            ["Broadcasts sent", String(polled.data?.websocket.broadcasts ?? 0)],
+            ["Stored detections", String(polled.data?.total ?? 0)],
+            ["Seconds since last event", String(polled.data?.seconds_since_event ?? "—")],
+            ["Polling interval", live.connected ? "15 s (websocket primary)" : "3 s (polling fallback)"],
+          ]}
+        />
+      </Panel>
+
+      <DetectionDrawer id={openId} onClose={() => setOpenId(null)} />
     </>
   );
 }

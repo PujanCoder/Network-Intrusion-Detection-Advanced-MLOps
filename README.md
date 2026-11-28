@@ -22,11 +22,11 @@ CICIDS2017 intrusion-detection ML pipeline, which is still in the repository and
 | Multi-dataset model training + evaluation + model card | Executed (`models/zeek`, `reports/zeek_model`) |
 | 10 rule-based behavioural detectors | Implemented, tested |
 | FastAPI REST + WebSocket API | Implemented, tested, executed |
-| React dashboard, 6 pages, live updates | Built, executed in a browser |
+| React SOC console, 8 pages, cookie-authenticated live updates | Built, executed in a browser |
 | Authenticated remote ingestion (`POST /api/ingest/zeek`) | Implemented, tested |
 | Hosted deployment — platform service (Render, Docker, `$PORT`, persistent disk) | Configured (`render.yaml`), see [`docs/DEPLOY_RENDER.md`](docs/DEPLOY_RENDER.md) |
-| Hosted deployment — serving dashboard (`src.serving`, `/api/v1`) | Verified in a container (`deploy/Dockerfile.nids`), see [`docs/DEPLOY_SERVING.md`](docs/DEPLOY_SERVING.md) |
-| 108 automated tests | Passing |
+| Hosted deployment — one service for dashboard + API (`src.serving`, `/api/v1`, `/ws/alerts`) | Verified in a container and on Render, see [`docs/DEPLOY_SERVING.md`](docs/DEPLOY_SERVING.md) |
+| 201 automated tests | Passing |
 | Batch CICIDS2017 pipeline (MLflow/DagsHub/DVC) | Preserved |
 | Live Zeek capture on a real interface | **Not verified here** (no Zeek in this container) |
 
@@ -41,11 +41,13 @@ python -m pip install -r requirements.txt
 
 cd frontend && npm ci && npm run build && cd ..
 
-PYTHONPATH=$PWD python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+NDR_API_KEY=dev-key PYTHONPATH=$PWD python -m uvicorn src.serving.app:app --host 0.0.0.0 --port 8000
 ```
 
-Open <http://localhost:8000>. The dashboard is served from `frontend/dist`; the API is under
-`/api`.
+Open <http://localhost:8000> and sign in with `dev-key`. That one process serves the React
+console (`frontend/dist`), the dashboard API under `/api/v1`, the alert stream at
+`/ws/alerts` and both ingestion paths. `src.api.app` remains available as the dev variant
+(`/api`, its own database) if you want the rule-based detector engine instead.
 
 Or run both containers (Zeek sensor + API/dashboard) with Compose:
 
@@ -198,17 +200,22 @@ failure (CI sets it after a successful `dvc pull`).
 
 ---
 
-## Dashboard
+## Dashboard (SOC console)
 
-| Page | What it shows |
-|---|---|
-| Overview | sensor/model status, total events, events and predictions per second, attacks, benign, suspicious, unclassified, critical alerts, traffic mix, 15-minute rate chart, latest predictions |
-| Live stream | continuously updating table (timestamp, endpoints, ports, proto, state, prediction, confidence, severity, explanation), malicious rows highlighted |
-| Traffic analytics | rates, volume, benign vs attack mix, attack classes, protocol mix, severity, top sources and destinations, confidence histogram |
-| Attack monitoring | detections with timestamps, endpoints, category, severity, confidence, evidence, history |
-| Model monitoring | active model, version, training data, feature schema, evaluation table, confusion matrix, importance, latency, unclassified count |
-| Event explorer | IP/protocol/prediction/severity/time filters, pagination, JSON drawer, CSV export |
-| Sensor health | Zeek capture state, counters, event→DB delay, database/API/WebSocket status, detector list |
+The console signs in with the deployment API key and keeps it server-side: the browser only
+receives an HttpOnly session cookie. Every number on every page is a SQL aggregate over
+stored records; with no traffic the pages say **"No new network events received."**
+
+| Page | Route | What it shows |
+|---|---|---|
+| Security overview | `/#/` | events, scored, attacks, benign, unclassified, detection rate, sensors online, dead letters; events-over-time, benign vs malicious, severity, confidence, protocols, top talkers, volume; recent detections |
+| Live monitoring | `/#/live` | WebSocket stream (polling fallback) with timestamp, endpoints, ports, proto/state, label, confidence, severity, model; pause/clear; stream health |
+| Threat detection | `/#/threats` | attacks only, severity bands with counts, model/label filters, distribution chart, click-through to evidence |
+| Detection investigation | `/#/investigate` | search by IP/label/service/sensor, severity/model/status/time filters, pagination, full-record drawer (probabilities + original Zeek JSON), CSV export |
+| Network sensors | `/#/sensors` | per-sensor events/scored/unclassified/attacks/duplicates/dead letters, last event, liveness verdict and reason, expected configuration |
+| Model monitoring | `/#/models` | CICIDS2017 and Zeek models side by side: estimator, version, schema, classes, counters, last inference, latency policy, explicit "experimental" banner |
+| System health | `/#/system` | application status, uptime, database integrity, WebSocket, deployed commit and branch, component list, endpoint map |
+| Traffic analytics | `/#/analytics` | 24 h volume, protocols, log types, top sources/destinations, confidence histogram |
 
 ---
 
@@ -226,13 +233,13 @@ python scripts/zeek_forward.py --url https://<service>.onrender.com \
     --log /opt/zeek/logs/current/conn.log --follow
 ```
 
-### The serving dashboard (`src.serving`, `/api/v1`)
+### The production service (`src.serving`, `/api/v1`)
 
-The service at `https://network-intrusion-detection-advanced.onrender.com` runs the
-older `src.serving` app (HTML dashboard at `/`, `POST /api/v1/zeek/ingest/records`
-for push ingestion). Its Render settings, environment variables, key handling and
-troubleshooting table are in [`docs/DEPLOY_SERVING.md`](docs/DEPLOY_SERVING.md);
-the matching blueprint is `deploy/render.serving.yaml`.
+The service at `https://network-intrusion-detection-advanced.onrender.com` runs
+`src.serving.app` and serves the React console plus every API on one URL. Render tracks
+the branch `feature/realtime-ndr-platform`; the dashboard bundle is committed, so the
+Python-only build command works unchanged. Settings, environment variables, auth and the
+troubleshooting table are in [`docs/DEPLOY_SERVING.md`](docs/DEPLOY_SERVING.md).
 
 ```bash
 curl -X POST "$BASE/api/v1/zeek/ingest/records" \
@@ -273,17 +280,17 @@ All runtime settings are environment variables (see `src/realtime/config.py`):
 `NDR_WS_QUEUE_SIZE`, `NDR_API_HOST`, `NDR_API_PORT` (or `PORT`, which hosted platforms
 inject), `NDR_API_KEY`, `NDR_INGEST_MAX_BATCH`.
 
-`NDR_API_KEY` is optional and off by default. When set, every `/api/*` call except
-`/api/health` must send it as `X-API-Key` (or `Authorization: Bearer`), and the WebSocket
-must pass `?api_key=...`. The dashboard prompts for it and stores it in `localStorage`
-(`VITE_API_KEY` only pre-fills it at build time). Setting `NDR_API_KEY` also enables
-`POST /api/ingest/zeek`; without it, remote ingestion fails closed with 503.
+`NDR_API_KEY` is the one secret. When set, every data endpoint requires it: machines send
+`X-API-Key`, browsers post it once to `POST /api/v1/session` and then carry an HttpOnly
+session cookie (no key in the bundle, no key in `localStorage`). The cookie authorises
+reads only; ingestion still needs the header. Without a key the data endpoints fail closed
+with `503 auth_not_configured`.
 
 ## Known limitations
 
 No live sensor validation in this environment; weak cross-dataset transfer; metadata-only
-detection (no payload analysis); SQLite single-node storage; authentication is opt-in
-(`NDR_API_KEY`) rather than enforced by default; heuristic detector thresholds that need
+detection (no payload analysis); SQLite single-node storage; authentication fails closed but
+is only as strong as the shared key; heuristic detector thresholds that need
 per-site tuning; on a Render free instance the SQLite file is ephemeral, so durable event
 history needs a paid plan with a disk (see `docs/DEPLOY_RENDER.md`). The full list, with context, is in
 [`docs/PROJECT_ARCHITECTURE.md`](docs/PROJECT_ARCHITECTURE.md#12-current-limitations).

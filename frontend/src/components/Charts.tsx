@@ -5,15 +5,13 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 
-import type { DistributionItem, SeriesPoint } from "../lib/api";
+import type { BucketCount, DistributionItem, IpCount, SeriesPoint } from "../lib/api";
 import { formatBytes, formatTime } from "../lib/format";
 import { EmptyState } from "./ui";
 
@@ -34,46 +32,73 @@ export const CHART_COLORS = [
 
 const axisStyle = { stroke: "#22344f", tick: { fill: "#55677f", fontSize: 9.5 } };
 
+// Semantic colours: a slice keeps its meaning whatever order the API returns.
+const LABEL_COLOURS: Record<string, string> = {
+  BENIGN: "#31d39b",
+  benign: "#31d39b",
+  attacks: "#ff5b6e",
+  CRITICAL: "#ff5b6e",
+  HIGH: "#ff8a4c",
+  MEDIUM: "#f3b23f",
+  LOW: "#59a8ff",
+  INFO: "#7c90aa",
+  UNKNOWN: "#55677f",
+  UNCLASSIFIED: "#55677f",
+};
+
+function colourFor(label: string, index: number): string {
+  return LABEL_COLOURS[label] ?? CHART_COLORS[index % CHART_COLORS.length];
+}
+
 function tooltipTime(label: unknown): string {
   if (typeof label === "number") return formatTime(label);
   return String(label);
 }
 
-export function RateChart({ series }: { series: SeriesPoint[] }) {
-  if (!series.length) return <EmptyState title="No traffic yet" detail="Charts populate as events arrive." />;
+export function EventsOverTimeChart({ series, height = 236 }: { series: SeriesPoint[]; height?: number }) {
+  const hasData = series.some((point) => point.predictions > 0);
+  if (!hasData) return <EmptyState title="No events in this window" detail="Charts fill as traffic is ingested." />;
   return (
-    <ResponsiveContainer width="100%" height={230}>
-      <LineChart data={series} margin={{ top: 6, right: 8, bottom: 0, left: -14 }}>
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart data={series} margin={{ top: 8, right: 10, bottom: 0, left: -16 }}>
+        <defs>
+          <linearGradient id="eventsFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#24d4e2" stopOpacity={0.35} />
+            <stop offset="100%" stopColor="#24d4e2" stopOpacity={0.02} />
+          </linearGradient>
+          <linearGradient id="attackFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ff5b6e" stopOpacity={0.4} />
+            <stop offset="100%" stopColor="#ff5b6e" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
         <CartesianGrid stroke="#122034" strokeDasharray="2 4" vertical={false} />
         <XAxis dataKey="t" tickFormatter={(value) => formatTime(value)} {...axisStyle} minTickGap={28} />
         <YAxis allowDecimals={false} {...axisStyle} />
-        <Tooltip
-          labelFormatter={tooltipTime}
-          formatter={(value: any, name: any) => [value, name === "events" ? "events/s" : "predictions/s"]}
-        />
-        <Line type="monotone" dataKey="events" stroke="#24d4e2" strokeWidth={1.8} dot={false} name="events" />
-        <Line type="monotone" dataKey="predictions" stroke="#8d6bff" strokeWidth={1.6} dot={false} name="predictions" />
-      </LineChart>
+        <Tooltip labelFormatter={tooltipTime} />
+        <Area type="monotone" dataKey="predictions" name="predictions" stroke="#24d4e2" strokeWidth={1.7} fill="url(#eventsFill)" />
+        <Area type="monotone" dataKey="attacks" name="attacks" stroke="#ff5b6e" strokeWidth={1.5} fill="url(#attackFill)" />
+      </AreaChart>
     </ResponsiveContainer>
   );
 }
 
-export function TrafficVolumeChart({ series }: { series: SeriesPoint[] }) {
-  if (!series.length) return <EmptyState title="No volume recorded yet" />;
+export function TrafficVolumeChart({ series, height = 190 }: { series: SeriesPoint[]; height?: number }) {
+  const hasData = series.some((point) => point.bytes > 0);
+  if (!hasData) return <EmptyState title="No byte counters in this window" detail="Zeek conn records carry byte totals." />;
   return (
-    <ResponsiveContainer width="100%" height={200}>
-      <AreaChart data={series} margin={{ top: 6, right: 8, bottom: 0, left: -6 }}>
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart data={series} margin={{ top: 6, right: 8, bottom: 0, left: -4 }}>
         <defs>
           <linearGradient id="bytesFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#24d4e2" stopOpacity={0.45} />
-            <stop offset="100%" stopColor="#24d4e2" stopOpacity={0.02} />
+            <stop offset="0%" stopColor="#8d6bff" stopOpacity={0.4} />
+            <stop offset="100%" stopColor="#8d6bff" stopOpacity={0.02} />
           </linearGradient>
         </defs>
         <CartesianGrid stroke="#122034" strokeDasharray="2 4" vertical={false} />
         <XAxis dataKey="t" tickFormatter={(value) => formatTime(value)} {...axisStyle} minTickGap={30} />
-        <YAxis tickFormatter={(value) => formatBytes(value)} {...axisStyle} width={54} />
-        <Tooltip labelFormatter={tooltipTime} formatter={(value: any) => [formatBytes(Number(value)), "bytes"]} />
-        <Area type="monotone" dataKey="bytes" stroke="#24d4e2" strokeWidth={1.6} fill="url(#bytesFill)" />
+        <YAxis tickFormatter={(value) => formatBytes(value)} {...axisStyle} width={56} />
+        <Tooltip labelFormatter={tooltipTime} formatter={(value) => [formatBytes(Number(value)), "bytes"]} />
+        <Area type="monotone" dataKey="bytes" stroke="#8d6bff" strokeWidth={1.5} fill="url(#bytesFill)" />
       </AreaChart>
     </ResponsiveContainer>
   );
@@ -81,15 +106,19 @@ export function TrafficVolumeChart({ series }: { series: SeriesPoint[] }) {
 
 export function DonutChart({
   data,
-  colors = CHART_COLORS,
-  height = 190,
+  colors,
+  semantic = true,
+  height = 180,
   emptyLabel = "No data",
 }: {
   data: DistributionItem[];
   colors?: string[];
+  semantic?: boolean;
   height?: number;
   emptyLabel?: string;
 }) {
+  const palette = (label: string, index: number) =>
+    semantic ? colourFor(label, index) : (colors ?? CHART_COLORS)[index % (colors ?? CHART_COLORS).length];
   const filtered = data.filter((item) => item.count > 0);
   if (!filtered.length) return <EmptyState title={emptyLabel} />;
   const total = filtered.reduce((sum, item) => sum + item.count, 0);
@@ -99,29 +128,22 @@ export function DonutChart({
     const from = (cursor / total) * 100;
     cursor += entry.count;
     const to = (cursor / total) * 100;
-    return `${colors[index % colors.length]} ${from.toFixed(2)}% ${to.toFixed(2)}%`;
+    return `${palette(entry.label, index)} ${from.toFixed(2)}% ${to.toFixed(2)}%`;
   });
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+    <div className="donut">
       <div
         role="img"
         aria-label={filtered.map((entry) => `${entry.label}: ${entry.count}`).join(", ")}
-        style={{
-          width: height,
-          height: height,
-          flex: "0 0 auto",
-          borderRadius: "50%",
-          background: `conic-gradient(${stops.join(", ")})`,
-          WebkitMask: "radial-gradient(circle, transparent 57%, #000 58%)",
-          mask: "radial-gradient(circle, transparent 57%, #000 58%)",
-        }}
+        className="donut-ring"
+        style={{ width: height, height, background: `conic-gradient(${stops.join(", ")})` }}
       />
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 7, minWidth: 0 }}>
+      <div className="donut-legend">
         {filtered.slice(0, 8).map((entry, index) => (
-          <div key={entry.label} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-              <span className="swatch" style={{ background: colors[index % colors.length] }} />
+          <div key={entry.label} className="legend-row">
+            <span className="legend-label">
+              <span className="swatch" style={{ background: palette(entry.label, index) }} />
               <span className="mono">{entry.label}</span>
             </span>
             <span className="mono muted">
@@ -136,7 +158,7 @@ export function DonutChart({
 
 export function DistributionBarChart({
   data,
-  height = 220,
+  height = 210,
   color = "#8d6bff",
   emptyLabel = "No data",
 }: {
@@ -145,16 +167,24 @@ export function DistributionBarChart({
   color?: string;
   emptyLabel?: string;
 }) {
-  if (!data.length) return <EmptyState title={emptyLabel} />;
+  const filtered = data.filter((item) => item.count > 0);
+  if (!filtered.length) return <EmptyState title={emptyLabel} />;
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <BarChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: -18 }}>
+      <BarChart data={filtered} margin={{ top: 6, right: 8, bottom: 0, left: -18 }}>
         <CartesianGrid stroke="#122034" strokeDasharray="2 4" vertical={false} />
-        <XAxis dataKey="label" {...axisStyle} interval={0} angle={data.length > 5 ? -18 : 0} textAnchor={data.length > 5 ? "end" : "middle"} height={data.length > 5 ? 46 : 26} />
+        <XAxis
+          dataKey="label"
+          {...axisStyle}
+          interval={0}
+          angle={filtered.length > 5 ? -18 : 0}
+          textAnchor={filtered.length > 5 ? "end" : "middle"}
+          height={filtered.length > 5 ? 48 : 26}
+        />
         <YAxis allowDecimals={false} {...axisStyle} />
         <Tooltip />
         <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-          {data.map((entry, index) => (
+          {filtered.map((entry, index) => (
             <Cell key={entry.label} fill={index === 0 ? color : `${color}b0`} />
           ))}
         </Bar>
@@ -165,15 +195,15 @@ export function DistributionBarChart({
 
 export function HistogramChart({
   data,
-  height = 190,
+  height = 180,
   color = "#24d4e2",
 }: {
-  data: { bucket: string; count: number }[];
+  data: BucketCount[];
   height?: number;
   color?: string;
 }) {
   const hasData = data.some((item) => item.count > 0);
-  if (!hasData) return <EmptyState title="No predictions yet" />;
+  if (!hasData) return <EmptyState title="No scored records yet" />;
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: -20 }}>
@@ -189,11 +219,11 @@ export function HistogramChart({
 
 export function TopIpsChart({
   data,
-  height = 240,
+  height = 226,
   color = "#24d4e2",
-  emptyLabel = "No IPs recorded yet",
+  emptyLabel = "No addresses recorded yet",
 }: {
-  data: { ip: string; count: number }[];
+  data: IpCount[];
   height?: number;
   color?: string;
   emptyLabel?: string;
@@ -204,9 +234,9 @@ export function TopIpsChart({
       <BarChart data={data} layout="vertical" margin={{ top: 4, right: 18, bottom: 0, left: 8 }}>
         <CartesianGrid stroke="#122034" strokeDasharray="2 4" horizontal={false} />
         <XAxis type="number" allowDecimals={false} {...axisStyle} />
-        <YAxis type="category" dataKey="ip" width={118} {...axisStyle} />
+        <YAxis type="category" dataKey="ip" width={122} {...axisStyle} />
         <Tooltip />
-        <Bar dataKey="count" fill={color} radius={[0, 4, 4, 0]} barSize={13} />
+        <Bar dataKey="count" fill={color} radius={[0, 4, 4, 0]} barSize={12} />
       </BarChart>
     </ResponsiveContainer>
   );
