@@ -93,6 +93,19 @@ def test_health_reports_the_deployed_commit(monkeypatch):
     assert body["build"]["branch"] == "feature/realtime-ndr-platform"
 
 
+def test_legacy_detections_endpoint_requires_the_key(monkeypatch):
+    with client() as c:
+        closed = c.get("/api/v1/detections")
+    assert closed.status_code == 503
+    assert closed.json()["detail"]["code"] == "auth_not_configured"
+
+    monkeypatch.setenv("IDS_API_KEY", KEY)
+    with client() as c:
+        assert c.get("/api/v1/detections").status_code == 401
+        assert c.get("/api/v1/detections", headers={"X-API-Key": "wrong"}).status_code == 401
+        assert c.get("/api/v1/detections", headers={"X-API-Key": KEY}).status_code == 200
+
+
 def test_data_endpoints_fail_closed_with_actionable_code():
     with client() as c:
         for path in ("/api/v1/zeek/status", "/api/v1/zeek/events", "/api/v1/zeek/detections"):

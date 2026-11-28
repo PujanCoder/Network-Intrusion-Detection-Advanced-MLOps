@@ -71,6 +71,12 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
 - `.gitignore` has a Python-oriented `lib/` rule. `frontend/src/lib/` (the dashboard's shared
   API/types/format modules) is force-tracked at the bottom of `.gitignore`; if those modules
   ever go missing from a checkout, check that rule first.
+- The live Render service `network-intrusion-detection-advanced` tracks the branch
+  `feature/realtime-ndr-platform`, not `main`; `/api/v1/health` reports the commit it is
+  running under `build`. Deploying main means fast-forwarding that branch to the merge
+  commit and POSTing `RENDER_DEPLOY_HOOK_URL` (the hook rebuilds whatever the branch holds).
+- `/api/v1/detections` uses the same API key as every other data endpoint; the dashboard
+  page itself is public but its data comes from key-protected calls.
 - The delivered serving app is `src.serving` (`render.serving.yaml`), not `src.api`:
   Render only clones git, so its CICIDS artefacts must be fetched during the build with
   `python scripts/fetch_models.py` (DVC + `DAGSHUB_USER_TOKEN`, or `MODEL_ARTIFACTS_URL`).
