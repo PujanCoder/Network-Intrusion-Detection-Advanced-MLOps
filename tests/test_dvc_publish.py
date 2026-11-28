@@ -169,7 +169,9 @@ def test_publish_stops_at_missing_credentials_for_an_authenticated_remote(publis
     assert any(step["step"] == "credentials" and step["outcome"] == "missing" for step in report["steps"])
 
 
-def test_publish_stops_when_the_artifacts_are_missing(publisher, repo):
+def test_publish_stops_when_the_artifacts_are_missing(publisher, repo, monkeypatch, tmp_path):
+    monkeypatch.setenv("IDS_MODEL_PATH", str(tmp_path / "absent_model.joblib"))
+    monkeypatch.setenv("IDS_PREPROCESSOR_PATH", str(tmp_path / "absent_preprocessor.joblib"))
     (repo / ".dvc" / "config.local").write_text(
         "['remote \"origin\"']\n    url = /tmp/does-not-matter\n", encoding="utf-8"
     )

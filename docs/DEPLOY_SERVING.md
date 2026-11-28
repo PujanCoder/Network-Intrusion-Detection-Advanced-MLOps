@@ -71,6 +71,15 @@ with `code = "cicids_model_unavailable"`, Zeek scoring unaffected). Use
 `python scripts/fetch_models.py --check` to inspect and `--strict` to turn a
 missing artefact into a build failure.
 
+### The artefacts ship in Git
+
+`models/best_model.joblib` and `models/preprocessor.joblib` are committed to the repository
+(and mirrored to the DagsHub remote), so a Render build finds them in the clone:
+`scripts/fetch_models.py` reports both as `ok` and never contacts DVC. The fetch step remains
+as the fallback for a checkout that lacks them — it also reports a file that is *committed but
+absent from the checkout*, which is a broken clone rather than an empty remote. `dvc.lock`
+records the md5/size of the committed bytes, so `verify_artifacts.py` reports no drift.
+
 ### Publishing the artefacts (one command, verified)
 
 The fetch step can only download what was pushed, so publishing comes first.

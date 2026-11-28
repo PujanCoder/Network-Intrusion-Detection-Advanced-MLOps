@@ -146,6 +146,26 @@ def test_present_artifacts_load_and_score(monkeypatch, tmp_path):
     assert state["loaded_at"]
 
 
+def test_non_finite_and_missing_inputs_still_score(monkeypatch, tmp_path):
+    """Real captures carry inf in the rate features of zero-duration flows."""
+
+    build_artifacts(tmp_path)
+    point_at(monkeypatch, tmp_path)
+    predictor = load_predictor()[0]
+
+    flow = {column: 0.5 for column in FEATURES}
+    flow[FEATURES[0]] = float("inf")
+    flow[FEATURES[1]] = float("-inf")
+    flow[FEATURES[2]] = "not-a-number"
+    flow[FEATURES[3]] = None
+    del flow[FEATURES[4]]
+
+    result = predictor.predict(flow)
+
+    assert result["label"] in {"BENIGN", "DDoS"}
+    assert result["confidence"] is not None and 0.0 <= result["confidence"] <= 1.0
+
+
 def test_preprocessor_alone_missing_is_named(monkeypatch, tmp_path):
     model_path, _ = build_artifacts(tmp_path)
     point_at(monkeypatch, tmp_path)

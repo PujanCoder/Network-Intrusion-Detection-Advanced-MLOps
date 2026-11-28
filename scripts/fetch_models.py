@@ -279,6 +279,32 @@ def _print_action_required(report: Report) -> None:
         print(f"  attempt [{attempt['strategy']}]: {attempt['outcome']}")
 
 
+def git_tracked(paths: list[str], root: Path | None = None) -> list[str]:
+    """Return the subset of ``paths`` that the checkout has under version control.
+
+    The CICIDS artefacts are committed to Git, so a missing file here means the
+    checkout is incomplete rather than the remote being empty. Reporting that
+    separately keeps a DVC fetch from being blamed for a broken clone.
+    """
+
+    if not paths:
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--", *paths],
+            cwd=root or ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def run(check_only: bool = False, strict: bool = False, verbose: bool = False) -> int:
     report = Report()
     report.inspect()
@@ -290,6 +316,16 @@ def run(check_only: bool = False, strict: bool = False, verbose: bool = False) -
             if artifact.required and not (artifact.path.is_file() and artifact.path.stat().st_size > 0)
         ]
         if missing:
+            tracked = git_tracked(missing)
+            if tracked:
+                report.attempts.append(
+                    {
+                        "strategy": "git",
+                        "outcome": "committed but absent from this checkout: "
+                        + ", ".join(tracked)
+                        + " - restore with `git checkout -- <path>`",
+                    }
+                )
             fetched = pull_with_dvc(report, missing, verbose=verbose)
             if not fetched:
                 url = os.getenv("MODEL_ARTIFACTS_URL")

@@ -127,8 +127,23 @@ class Predictor:
                     digest.update(chunk)
         return f"sha256:{digest.hexdigest()[:12]}"
 
+    def _sanitise(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Bring a raw capture into the numeric, finite space the transformer expects.
+
+        CICIDS rows carry ``inf`` in the rate features when duration is 0
+        (``Flow Bytes/s``, ``Flow Packets/s``); the training pipeline replaced
+        non-finite values with the column median before fitting, but the bundle
+        does not carry those medians. Serving substitutes 0.0, which the fitted
+        transformer accepts and which reads as "no measurable rate" for an
+        undefined one. Missing or non-numeric fields are treated the same way.
+        """
+
+        numeric = frame.apply(pd.to_numeric, errors="coerce")
+        return numeric.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
     def _transform(self, frame: pd.DataFrame) -> Any:
-        transformed = self.preprocessor.transform(frame) if self.preprocessor is not None else frame
+        prepared = self._sanitise(frame)
+        transformed = self.preprocessor.transform(prepared) if self.preprocessor is not None else prepared
         if self.model_features is not None:
             transformed = transformed[self.model_features]
         return transformed
