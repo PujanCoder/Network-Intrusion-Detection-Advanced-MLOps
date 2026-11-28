@@ -7,6 +7,7 @@ deployment reports ``degraded`` with the reason instead of a green checkmark.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,20 @@ from src.serving.zeek_predictor import zeek_model_state
 
 APP_NAME = "nids-serving"
 APP_VERSION = "0.1.0"
+
+
+def build_info() -> dict[str, Any]:
+    """The commit actually running, so a deploy can be verified without the dashboard.
+
+    Render injects RENDER_GIT_COMMIT/RENDER_GIT_BRANCH into the build and runtime;
+    the GIT_* names cover Docker builds that pass them explicitly.
+    """
+
+    return {
+        "commit": os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT"),
+        "branch": os.environ.get("RENDER_GIT_BRANCH") or os.environ.get("GIT_BRANCH"),
+        "service": os.environ.get("RENDER_SERVICE_NAME"),
+    }
 
 
 def database_state(path: Path) -> dict[str, Any]:
@@ -79,6 +94,7 @@ def health_payload(state: Any) -> dict[str, Any]:
         "degraded_components": degraded,
         "app": APP_NAME,
         "version": APP_VERSION,
+        "build": build_info(),
         "components": {
             "auth": auth_summary(settings),
             "cicids_model": cicids,
