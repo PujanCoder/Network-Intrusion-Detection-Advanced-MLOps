@@ -72,6 +72,10 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
   `python scripts/fetch_models.py` (DVC + `DAGSHUB_USER_TOKEN`, or `MODEL_ARTIFACTS_URL`).
   The script is non-fatal by design; `--strict` fails a build instead. `dvc push` in
   `.github/workflows/publish-artifacts.yml` is what puts the artefacts in the remote.
+- Run `python scripts/check_dvc_deps.py` before any `dvc commit`/`dvc push`: DVC aborts on the
+  first declared dependency that is absent, which is usually a stale or partial checkout, not a
+  missing feature. The checker sorts deps into missing *source* (blocking: `git pull`),
+  not-yet-built *output*, and DVC-tracked *input* (`dvc pull`).
 - Batch artefacts are DVC-tracked (DagsHub HTTP remote). `tests/test_feature_contract.py`
   skips when `models/best_model.joblib` / `models/preprocessor.joblib` are absent; set
   `NDR_REQUIRE_ARTIFACTS=1` to turn that into a failure. Run `dvc pull` first.
