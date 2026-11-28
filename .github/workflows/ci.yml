@@ -51,12 +51,12 @@ jobs:
         run: python -m pip check
 
       - name: Compile source and tests
-        run: python -m compileall -q src tests train.py sensor.py
+        run: python -m compileall -q src tests scripts train.py sensor.py
 
       - name: Lint (errors only)
         run: |
           python -m pip install ruff
-          python -m ruff check --select E9,F63,F7,F82 src tests train.py sensor.py
+          python -m ruff check --select E9,F63,F7,F82 src tests scripts train.py sensor.py
 
       - name: Validate DVC pipeline definition
         run: |
@@ -105,6 +105,71 @@ jobs:
           if payload.get("database", {}).get("integrity") != "ok":
               sys.exit("database integrity check failed")
           print("model_loaded:", payload.get("model_loaded"))
+          PY
+
+      - name: Serving app smoke test
+        env:
+          IDS_DB_PATH: /tmp/nids-ci/ids.db
+          IDS_API_KEY: ci-serving-key
+          IDS_ZEEK_LOG_DIR: /tmp/nids-ci/zeek
+        run: |
+          mkdir -p /tmp/nids-ci/zeek
+          python -m uvicorn src.serving.app:app --host 127.0.0.1 --port 8098 --log-level warning &
+          server_pid=$!
+          trap 'kill $server_pid' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8098/api/v1/health -o /tmp/nids-ci/health.json; then break; fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+          import urllib.error
+          import urllib.request
+
+          payload = json.loads(pathlib.Path("/tmp/nids-ci/health.json").read_text())
+          print(json.dumps(payload, indent=2))
+          if payload["components"]["zeek_model"]["loaded"] is not True:
+              sys.exit("Zeek model must load from the tracked artefact")
+          if payload["components"]["auth"]["configured"] is not True:
+              sys.exit("IDS_API_KEY must be picked up")
+          if "cicids_model" in payload["degraded_components"]:
+              print("note: CICIDS artefacts absent in CI (expected without dvc pull)")
+
+          def status(path, key=None):
+              req = urllib.request.Request(f"http://127.0.0.1:8098{path}")
+              if key:
+                  req.add_header("X-API-Key", key)
+              try:
+                  with urllib.request.urlopen(req) as response:
+                      return response.status, json.load(response)
+              except urllib.error.HTTPError as error:
+                  return error.code, json.load(error)
+
+          code, body = status("/api/v1/zeek/status")
+          if code != 503 or body["detail"]["code"] != "auth_not_configured":
+              sys.exit(f"unauthenticated status call must fail closed, got {code} {body}")
+
+          code, _ = status("/api/v1/zeek/status", "bad-key")
+          if code != 401:
+              sys.exit(f"wrong key must be rejected, got {code}")
+
+          record = {"ts": 1700000000.0, "uid": "Cci0001", "id.orig_h": "10.0.0.5", "id.orig_p": 41000,
+                    "id.resp_h": "10.0.0.9", "id.resp_p": 23, "proto": "tcp", "service": "-",
+                    "duration": 0.0, "orig_bytes": 0, "resp_bytes": 0, "conn_state": "S0",
+                    "orig_pkts": 1, "resp_pkts": 0, "orig_ip_bytes": 60, "resp_ip_bytes": 0}
+          request = urllib.request.Request(
+              "http://127.0.0.1:8098/api/v1/zeek/ingest/records",
+              data=json.dumps({"records": [record]}).encode(),
+              headers={"Content-Type": "application/json", "X-API-Key": "ci-serving-key"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request) as response:
+              pushed = json.load(response)
+          print("ingest:", pushed)
+          if pushed["scored"] != 1:
+              sys.exit("a conn record must be scored by the Zeek model in CI")
           PY
 
   frontend:
