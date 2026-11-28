@@ -202,6 +202,36 @@ def test_present_artifact_is_not_downloaded_again(fetch, monkeypatch):
     assert (fetch.ROOT / "models" / "best_model.joblib").read_bytes() == b"model-bytes"
 
 
+def test_git_tracked_lists_only_paths_in_the_checkout(fetch, monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")  # git only; dvc stays out of reach
+    repo = tmp_path / "clone"
+    (repo / "models").mkdir(parents=True)
+    (repo / "models" / "best_model.joblib").write_bytes(b"model")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=repo, check=True)
+
+    assert fetch.git_tracked(["models/best_model.joblib"], repo) == ["models/best_model.joblib"]
+    assert fetch.git_tracked(["models/never_committed.joblib"], repo) == []
+
+
+def test_missing_but_committed_artifact_names_the_checkout(fetch, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    repo = tmp_path / "clone"
+    (repo / "models").mkdir(parents=True)
+    (repo / "models" / "best_model.joblib").write_bytes(b"model")
+    (repo / "models" / "preprocessor.joblib").write_bytes(b"preprocessor")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=repo, check=True)
+    (repo / "models" / "best_model.joblib").unlink()
+    monkeypatch.setattr(fetch, "ROOT", repo)
+    monkeypatch.setattr(fetch, "DVC_DIR", repo / ".dvc")
+
+    assert fetch.run(strict=True) == 1
+
+    out = capsys.readouterr().out
+    assert "committed but absent from this checkout: models/best_model.joblib" in out
+
+
 def test_json_report_is_machine_readable(fetch, capsys):
     write_artifacts(fetch.ROOT)
 

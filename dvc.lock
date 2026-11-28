@@ -81,12 +81,12 @@ stages:
       nfiles: 7
     - path: models/best_model.joblib
       hash: md5
-      md5: 4b58332d761da6378f6a94d8f6af6d87
-      size: 2674969
+      md5: 5a60a301926b7b183e028210a9509211
+      size: 2698297
     - path: models/preprocessor.joblib
       hash: md5
-      md5: 1d764e434076fad22c162a6c2e556472
-      size: 10988
+      md5: 66d5ee0cd4a3afc6937e2ddbd99ef008
+      size: 10795
     - path: reports/data_drift_report.html
       hash: md5
       md5: ee145c034ff6cb7de328649dac3aeba0
@@ -112,12 +112,12 @@ stages:
     deps:
     - path: models/best_model.joblib
       hash: md5
-      md5: 4b58332d761da6378f6a94d8f6af6d87
-      size: 2674969
+      md5: 5a60a301926b7b183e028210a9509211
+      size: 2698297
     - path: models/preprocessor.joblib
       hash: md5
-      md5: 1d764e434076fad22c162a6c2e556472
-      size: 10988
+      md5: 66d5ee0cd4a3afc6937e2ddbd99ef008
+      size: 10795
     - path: src/serving/validate_artifacts.py
       hash: md5
       md5: 73a6b35d890ad3bd4575787cdc3df4e5

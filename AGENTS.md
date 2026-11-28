@@ -60,8 +60,12 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
   `events_per_second` is the 5-minute average.
 - Replayed records carry `"_replay": true` in `raw_json`; `Store.replay_event_count()` drives
   the replay banner and `sensor.mode`.
-- The live model is `models/zeek/zeek_model.joblib` (git-tracked on purpose); the batch model
-  `models/best_model.joblib` is a DVC/pipeline artefact and stays ignored.
+- Both serving artefacts are git-tracked: `models/zeek/zeek_model.joblib` and the CICIDS
+  pair (`models/best_model.joblib`, `models/preprocessor.joblib`), so a Render build loads
+  them from the clone and needs no DVC access. `dvc.lock` is kept in step with the committed
+  bytes, and the same objects are also pushed to the DagsHub remote as a fallback.
+  `tests/test_committed_artifacts.py` guards the contract (78 features in, 68 to the
+  estimator, classes BENIGN/DDoS) using two real CICIDS2017 flows as fixtures.
 - `frontend/dist` and `frontend/node_modules` are gitignored; `scripts/run_api.sh` builds the
   bundle when it is missing.
 - `.gitignore` has a Python-oriented `lib/` rule. `frontend/src/lib/` (the dashboard's shared
@@ -85,9 +89,14 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
   first declared dependency that is absent, which is usually a stale or partial checkout, not a
   missing feature. The checker sorts deps into missing *source* (blocking: `git pull`),
   not-yet-built *output*, and DVC-tracked *input* (`dvc pull`).
-- Batch artefacts are DVC-tracked (DagsHub HTTP remote). `tests/test_feature_contract.py`
-  skips when `models/best_model.joblib` / `models/preprocessor.joblib` are absent; set
-  `NDR_REQUIRE_ARTIFACTS=1` to turn that into a failure. Run `dvc pull` first.
+- The raw dataset stays DVC-tracked (DagsHub HTTP remote, 8 CICIDS2017 CSVs); only the
+  serving artefacts are committed. `tests/test_feature_contract.py` skips when
+  `models/best_model.joblib` / `models/preprocessor.joblib` are absent; set
+  `NDR_REQUIRE_ARTIFACTS=1` to turn that into a failure.
+- Serving sanitises before transforming: real captures carry `inf` in rate features when
+  duration is 0, and the training pipeline replaced those with the column median. The bundle
+  does not carry the medians, so `Predictor._sanitise` coerces to numeric and fills the gaps
+  with 0.0 — without it, a legitimate flow raises `ValueError` inside PowerTransformer.
 - Detection results are decision support: in-distribution F1 ≈ 0.97, but cross-dataset
   transfer is weak and the zero-day probe scores 0 recall. Do not describe the model as
   production-ready.
