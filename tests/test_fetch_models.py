@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import os
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -129,25 +130,67 @@ def test_archive_entries_cannot_escape_the_project(fetch, monkeypatch, tmp_path)
     assert not (fetch.ROOT / "escaped.txt").exists()
 
 
+def test_invalid_remote_keys_are_repaired_before_pulling(fetch, monkeypatch):
+    """A poisoned config.local must not stop the build: fetch strips S3 keys."""
+
+    (fetch.ROOT / ".dvc").mkdir(parents=True)
+    (fetch.ROOT / ".dvc" / "config").write_text(
+        "['remote \"origin\"']\n    url = https://dagshub.com/owner/repo.dvc\n", encoding="utf-8"
+    )
+    local = fetch.ROOT / ".dvc" / "config.local"
+    local.write_text(
+        "['remote \"origin\"']\n    access_key_id = AKIAIOSFODNN7EXAMPLE\n"
+        "    secret_access_key = wJalrXUtnFEMI\n",
+        encoding="utf-8",
+    )
+
+    removed = fetch.dvc_remote.sanitize(fetch.ROOT)
+
+    assert removed == ["access_key_id", "secret_access_key"]
+    assert fetch.dvc_remote.status(fetch.ROOT).ok is True
+    assert fetch.dvc_remote.LocalConfig.load(local).entries() == {}
+
+
 def test_credentials_come_from_the_environment_and_are_redacted(fetch, monkeypatch):
     token = "dagshub-token-value"
     (fetch.ROOT / ".dvc").mkdir(parents=True)
     (fetch.ROOT / ".dvc" / "config").write_text(
-        "['remote \"origin\"']\n    url = s3://dvc\n"
-        "    endpointurl = https://dagshub.com/owner/repo.s3\n",
-        encoding="utf-8",
+        "['remote \"origin\"']\n    url = https://dagshub.com/owner/repo.dvc\n", encoding="utf-8"
     )
     monkeypatch.setenv("DAGSHUB_USER_TOKEN", token)
+    monkeypatch.delenv("DAGSHUB_USERNAME", raising=False)
+
+    applied, injected = fetch.dvc_remote.apply_env_credentials(fetch.ROOT)
+
+    entries = fetch.dvc_remote.LocalConfig.load(fetch.ROOT / ".dvc" / "config.local").entries()
+    assert applied == ["auth", "password", "user"]
+    assert injected is True
+    assert entries["user"] == "owner"
+    assert entries["password"] == token
 
     report = fetch.Report()
-    modes = fetch._credential_modes(report)
-
-    assert fetch._dags_hub_username() == "owner"
-    basic = dict(dict(modes)["DagsHub basic auth"])
-    assert basic["user"] == "owner"
-    assert basic["password"] == token
+    report.secrets.add(token)
     assert report.redact(f"leaked {token}") == "leaked ***"
-    assert token not in str(modes[0][0])
+
+
+def test_pull_reports_missing_credentials_instead_of_hanging(fetch, monkeypatch):
+    (fetch.ROOT / ".dvc").mkdir(parents=True)
+    (fetch.ROOT / ".dvc" / "config").write_text(
+        "['remote \"origin\"']\n    url = https://dagshub.com/owner/repo.dvc\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(fetch, "_dvc_command", lambda: ["dvc"])
+    monkeypatch.setattr(
+        fetch,
+        "_dvc",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "", "ERROR: authorization failed"),
+    )
+
+    report = fetch.Report()
+    assert fetch.pull_with_dvc(report, ["models/best_model.joblib"]) is False
+
+    outcomes = [attempt["outcome"] for attempt in report.attempts]
+    assert any("DAGSHUB_USER_TOKEN" in outcome for outcome in outcomes)
+    assert any("authorization failed" in outcome for outcome in outcomes)
 
 
 def test_present_artifact_is_not_downloaded_again(fetch, monkeypatch):

@@ -4,19 +4,23 @@ name: publish-artifacts
 #
 # The Render service pulls models/best_model.joblib and models/preprocessor.joblib
 # from that remote during its build. Those files are gitignored DVC outputs, so
-# they only reach the remote when something pushes them - run this workflow once
-# after a model change, or run `dvc push` from a machine that has them locally.
+# they only reach the remote when something pushes them.
 #
-# Manual on purpose: it needs the raw CICIDS2017 capture and 10-20 minutes of
-# training, which is too heavy to run on every push.
+# Everything happens in scripts/dvc_publish.py: repair the remote config, verify
+# the artefacts load with the serving code, commit/lock them to what is on disk,
+# push, then prove the objects are retrievable. The upload is never assumed to
+# have worked: the job fails if the verification step fails.
+#
+# Required secret: DAGSHUB_TOKEN (DagsHub -> Settings -> Tokens, repo write).
+# Optional secret: RENDER_DEPLOY_HOOK_URL, to redeploy the service afterwards.
 
 on:
   workflow_dispatch:
     inputs:
       retrain:
-        description: "Run the DVC pipeline before pushing (otherwise only push existing outputs)"
+        description: "Train first instead of publishing existing outputs"
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -27,9 +31,7 @@ jobs:
     env:
       PYTHONPATH: ${{ github.workspace }}
       DAGSHUB_USER_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_DEFAULT_REGION: us-east-1
+      DAGSHUB_USERNAME: ${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,19 +46,22 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Pull the raw dataset
+      - name: Check remote configuration
+        run: python scripts/dvc_remote.py --fix
+
+      - name: Fetch the raw dataset
+        if: inputs.retrain
         run: python -m dvc pull -r origin data/raw/MachineLearningCSV.dvc
 
       - name: Train and evaluate
         if: inputs.retrain
         run: python -m src.pipelines.pipeline
 
-      - name: Push artefacts to DagsHub
-        run: |
-          test -f models/best_model.joblib
-          test -f models/preprocessor.joblib
-          python -m dvc push -r origin models/best_model.joblib models/preprocessor.joblib
+      - name: Publish and verify the artefacts
+        run: python scripts/dvc_publish.py
 
-      - name: Report
-        run: |
-          echo "Published:" && du -h models/best_model.joblib models/preprocessor.joblib
+      - name: Trigger the Render deployment
+        if: env.RENDER_DEPLOY_HOOK_URL != ''
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"

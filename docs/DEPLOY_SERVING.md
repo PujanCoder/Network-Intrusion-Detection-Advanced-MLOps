@@ -21,7 +21,7 @@ The live service is a **Web Service → Python 3** (native runtime, not Docker):
 
 | Setting | Value |
 | --- | --- |
-| Build command | `pip install -r requirements.txt && python scripts/fetch_models.py` |
+| Build command | `pip install -r requirements.txt && python scripts/fetch_models.py && python scripts/verify_artifacts.py` |
 | Start command | `uvicorn src.serving.app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'` |
 | Health check path | `/api/v1/health` |
 
@@ -35,7 +35,7 @@ Environment variables:
 | `IDS_ZEEK_ENABLED` | no | `true` only when Zeek writes logs into the container. Leave unset for push-based ingestion. |
 | `IDS_MODEL_PATH`, `IDS_PREPROCESSOR_PATH` | no | Override where the CICIDS artefacts are looked up. Defaults are repository-root relative (`models/best_model.joblib`, `models/preprocessor.joblib`). |
 | `DAGSHUB_USER_TOKEN` | build only | Token from <https://dagshub.com/user/settings/tokens>. Lets the build pull the DVC artefacts. |
-| `DAGSHUB_USERNAME` | build only | DagsHub owner of the repository; used for basic auth against the `.s3` endpoint. Inferred from `.dvc/config` when unset. |
+| `DAGSHUB_USERNAME` | build only | DagsHub owner of the repository, used as the basic-auth user for the HTTPS DVC remote (`…/<repo>.dvc`). Inferred from `.dvc/config` when unset. |
 | `MODEL_ARTIFACTS_URL` | build only | Fallback: `https://` (or `file://`) tar.gz/zip containing `models/`. |
 | `MODEL_ARTIFACTS_TOKEN` | build only | Bearer token for `MODEL_ARTIFACTS_URL`, if it needs one. |
 
@@ -55,10 +55,13 @@ in order:
 
 1. the file is already present and non-empty (no-op);
 2. `dvc pull models/best_model.joblib models/preprocessor.joblib -r origin`
-   using credentials from the environment — `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
-   when set, otherwise `DAGSHUB_USER_TOKEN` (+ `DAGSHUB_USERNAME`) via DVC basic auth.
-   Credentials are written to `.dvc/config.local` for the duration of the pull and
-   removed afterwards; they are never committed and never printed (output is redacted);
+   using credentials from the environment. The remote is an HTTPS DagsHub DVC
+   endpoint, so it authenticates with basic auth: `DAGSHUB_USER_TOKEN` as the
+   password and `DAGSHUB_USERNAME` as the user. Before pulling, the script strips
+   options that do not belong to this remote type (`access_key_id`,
+   `secret_access_key`) — DVC rejects those with `extra keys not allowed` and then
+   refuses to run *any* command. Credentials live in the gitignored
+   `.dvc/config.local` (mode 0600) and are never printed;
 3. `MODEL_ARTIFACTS_URL`, a tar.gz/zip containing `models/`, with an optional
    `MODEL_ARTIFACTS_TOKEN` bearer token.
 
@@ -68,18 +71,34 @@ with `code = "cicids_model_unavailable"`, Zeek scoring unaffected). Use
 `python scripts/fetch_models.py --check` to inspect and `--strict` to turn a
 missing artefact into a build failure.
 
-### The artefacts must exist in the remote first
+### Publishing the artefacts (one command, verified)
 
-The fetch step can only download what was pushed. `dvc push` is a separate,
-manual act:
+The fetch step can only download what was pushed, so publishing comes first.
+`scripts/dvc_publish.py` does the whole sequence and refuses to claim success
+without proof:
 
 ```sh
-python -m src.pipelines.pipeline        # or: dvc repro
-dvc push models/best_model.joblib models/preprocessor.joblib
+DAGSHUB_USER_TOKEN=<token with repo write scope> python scripts/dvc_publish.py
 ```
 
-or run the `publish-artifacts` workflow (Actions → publish-artifacts → Run
-workflow), which pulls the raw capture, retrains and pushes.
+1. repairs `.dvc/config.local` (removes options invalid for the remote type) and
+   applies basic-auth credentials from the environment;
+2. loads both artefacts through `src.serving.predictor.Predictor` and runs a smoke
+   prediction — a bundle that cannot score is never uploaded;
+3. checks every `dvc.yaml` dependency is on disk;
+4. `dvc commit -f`, or, when a sibling stage output is absent (cleaned
+   `data/processed/*`, `reports/*`), a surgical re-lock that rewrites only the
+   md5/size of the two artefacts in `dvc.lock`;
+5. `dvc push` and then verifies: `dvc status -c` plus an authenticated `HEAD` on
+   each remote object (`/files/md5/xx/…`) with the size compared to the file.
+
+Exit codes: `0` published and verified, `2` credentials/config, `3` artefacts
+unusable or a dependency missing, `4` commit/push failed, `5` verification failed.
+
+The same step runs in the `publish-artifacts` workflow (Actions →
+publish-artifacts → Run workflow), which can optionally retrain first and then
+POST `RENDER_DEPLOY_HOOK_URL` so the new artefacts reach the service without a
+manual Render action.
 
 Verify from a clean clone before redeploying:
 
@@ -146,7 +165,8 @@ and are only present when they exist in the build context.
 | data calls return `401` / `code=invalid_api_key` | key configured, wrong or missing header | open the dashboard as `/?api_key=...` |
 | "Zeek Status: blocked" on the dashboard | the page has no key yet | open `/?api_key=...` once |
 | `components.zeek_model.loaded = false` | `models/zeek/zeek_model.joblib` missing or a schema mismatch | keep the tracked artefact, or fix `IDS_ZEEK_MODEL_PATH`; the error text says which |
-| `components.cicids_model.loaded = false` | the DVC artefact was not fetched (never pushed, or no credentials at build time) | run `publish-artifacts` (or `dvc push`) to publish it, set `DAGSHUB_USER_TOKEN` on Render, redeploy; `python scripts/fetch_models.py --check` shows what the build sees |
+| `components.cicids_model.loaded = false` | the DVC artefact was not fetched (never pushed, or no credentials at build time) | run `python scripts/dvc_publish.py` (or the `publish-artifacts` workflow) to publish, set `DAGSHUB_USER_TOKEN` on Render, redeploy; `python scripts/fetch_models.py --check` shows what the build sees |
+| `configuration error - extra keys not allowed @ data['remote']['origin']['access_key_id']` | `.dvc/config.local` carries S3 options while the remote is the HTTPS DagsHub endpoint | `python scripts/dvc_remote.py --fix` (the build runs the same repair automatically) |
 | `/api/v1/health` reports `cicids_model.error` mentioning `not found` but the file exists | `IDS_MODEL_PATH` points somewhere else | check the resolved path in `components.cicids_model.model_path` |
 | Zeek Events stays 0 | nothing is being pushed and no log directory exists | use `/api/v1/zeek/ingest/records` or enable the tailer |
 | Scored Detections stays 0 while events grow | every pushed event is a non-`conn` log, or the model failed to load | check the detection rows: `reason` explains it |

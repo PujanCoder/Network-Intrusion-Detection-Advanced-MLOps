@@ -72,6 +72,13 @@ PYTHONPATH=$PWD python -m src.realtime.training --output-dir models/zeek
   `python scripts/fetch_models.py` (DVC + `DAGSHUB_USER_TOKEN`, or `MODEL_ARTIFACTS_URL`).
   The script is non-fatal by design; `--strict` fails a build instead. `dvc push` in
   `.github/workflows/publish-artifacts.yml` is what puts the artefacts in the remote.
+- The DagsHub remote is the HTTPS `.dvc` endpoint, so it uses basic auth (`auth`/`user`/
+  `password`). S3 options in `.dvc/config.local` make DVC refuse to start with
+  `extra keys not allowed`; `scripts/dvc_remote.py --fix` strips them and
+  `scripts/fetch_models.py` runs that repair before every pull.
+- Publishing is `python scripts/dvc_publish.py`: it repairs the config, verifies both
+  artefacts through `src.serving.predictor`, locks them (commit or surgical relock),
+  pushes and verifies with `dvc status -c` + an authenticated HEAD per object.
 - Run `python scripts/check_dvc_deps.py` before any `dvc commit`/`dvc push`: DVC aborts on the
   first declared dependency that is absent, which is usually a stale or partial checkout, not a
   missing feature. The checker sorts deps into missing *source* (blocking: `git pull`),

@@ -17,7 +17,7 @@ services:
     name: nids-serving
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt && python scripts/fetch_models.py
+    buildCommand: pip install -r requirements.txt && python scripts/fetch_models.py && python scripts/verify_artifacts.py
     startCommand: uvicorn src.serving.app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
     healthCheckPath: /api/v1/health
     autoDeploy: true
@@ -29,10 +29,11 @@ services:
       - key: IDS_ZEEK_ENABLED
         value: "false"
       # Credentials for the DagsHub DVC remote, set in the Render dashboard.
-      # DAGSHUB_USER_TOKEN is the token from https://dagshub.com/user/settings/tokens;
-      # DAGSHUB_USERNAME is the DagsHub account that owns the repository, used for
-      # basic auth against the .s3 endpoint. Alternatively provide the repo's
-      # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the DagsHub settings page.
+      # The remote is the HTTPS DVC endpoint (…/<repo>.dvc), so it authenticates
+      # with HTTP basic auth: DAGSHUB_USER_TOKEN (https://dagshub.com/user/settings/tokens)
+      # as the password and DAGSHUB_USERNAME as the user. S3 keys do not apply to
+      # this remote; if a .dvc/config.local ever carries access_key_id, DVC refuses
+      # to start and fetch_models.py strips those keys before pulling.
       - key: DAGSHUB_USER_TOKEN
         sync: false
       - key: DAGSHUB_USERNAME

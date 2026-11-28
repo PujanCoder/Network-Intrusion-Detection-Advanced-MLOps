@@ -30,6 +30,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dvc_remote  # noqa: E402  (sibling script: keeps the DVC remote config valid)
+
 ROOT = Path(__file__).resolve().parents[1]
 DVC_DIR = ROOT / ".dvc"
 TMP_PREFIX = ".fetch-"
@@ -117,67 +120,20 @@ def _dvc(*args: str, timeout: int = 900) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _dags_hub_username() -> str | None:
-    """Owner from the configured remote URL, e.g. dagshub.com/<owner>/<repo>.s3."""
+def pull_with_dvc(
+    report: Report,
+    targets: list[str],
+    verbose: bool = False,
+    keep_credentials: bool = False,
+) -> bool:
+    """Fetch ``targets`` from the configured remote.
 
-    explicit = os.getenv("DAGSHUB_USERNAME")
-    if explicit:
-        return explicit
-    try:
-        config = (DVC_DIR / "config").read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in config.splitlines():
-        if "endpointurl" not in line and "url" not in line:
-            continue
-        value = line.split("=", 1)[-1].strip()
-        parsed = urllib.parse.urlparse(value)
-        if parsed.netloc.endswith("dagshub.com"):
-            parts = [part for part in parsed.path.split("/") if part]
-            if parts:
-                return parts[0]
-    return None
+    The remote config is repaired first: DVC refuses to parse a config that mixes
+    S3-only keys (``access_key_id``, ``secret_access_key``) with an HTTPS remote,
+    which is the state a manual ``dvc remote modify --local access_key_id`` leaves
+    behind. Credentials come from the environment only and are never printed.
+    """
 
-
-def _set_local(*args: str) -> None:
-    result = _dvc("remote", "modify", "origin", "--local", *args)
-    if result.returncode != 0:
-        raise RuntimeError(f"dvc remote modify failed: {result.stderr.strip()[:300]}")
-
-
-def _clear_local_credentials() -> None:
-    """Remove the credentials we injected so they do not outlive the build."""
-
-    for option in ("auth", "user", "password"):
-        try:
-            _dvc("remote", "modify", "origin", "--local", "--unset", option)
-        except Exception:  # noqa: BLE001 - best effort cleanup
-            pass
-
-
-def _credential_modes(report: Report) -> list[tuple[str, list[tuple[str, ...]]]]:
-    """Credential strategies to try, in order. Values come from the environment."""
-
-    modes: list[tuple[str, list[tuple[str, ...]]]] = []
-    if os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"):
-        _register_secret(report, os.getenv("AWS_ACCESS_KEY_ID"))
-        _register_secret(report, os.getenv("AWS_SECRET_ACCESS_KEY"))
-        modes.append(("environment AWS keys", []))
-    token = os.getenv("DAGSHUB_USER_TOKEN")
-    if token:
-        _register_secret(report, token)
-        username = _dags_hub_username()
-        if username:
-            modes.append(
-                (
-                    "DagsHub basic auth",
-                    [("auth", "basic"), ("user", username), ("password", token)],
-                )
-            )
-    return modes
-
-
-def pull_with_dvc(report: Report, targets: list[str], verbose: bool = False) -> bool:
     if not DVC_DIR.is_dir():
         report.attempts.append({"strategy": "dvc", "outcome": "skipped: no .dvc directory"})
         return False
@@ -185,34 +141,61 @@ def pull_with_dvc(report: Report, targets: list[str], verbose: bool = False) -> 
         report.attempts.append({"strategy": "dvc", "outcome": "skipped: dvc not installed"})
         return False
 
-    modes = _credential_modes(report) or [("no credentials configured", [])]
-    for name, settings in modes:
-        try:
-            _clear_local_credentials()
-            for key, value in settings:
-                _set_local(key, value)
-            args = ["pull", *targets, "-r", "origin"]
-            if verbose:
-                args.append("-v")
-            result = _dvc(*args)
-            if result.returncode == 0:
-                outcome = "ok"
-            elif "do not exist neither locally nor on remote" in result.stderr:
-                outcome = (
-                    "failed: the remote does not have the objects dvc.lock points at "
-                    "(the artefact was never pushed) - run `dvc push` or the "
-                    "publish-artifacts workflow"
-                )
-            else:
-                outcome = f"failed: {report.redact(result.stderr.strip())[:400]}"
-            report.attempts.append({"strategy": f"dvc ({name})", "outcome": outcome})
-            if result.returncode == 0:
-                return True
-        except Exception as exc:  # noqa: BLE001 - reported, never fatal
-            report.attempts.append({"strategy": f"dvc ({name})", "outcome": f"error: {report.redact(str(exc))[:300]}"})
-        finally:
-            _clear_local_credentials()
-    return False
+    _register_secret(report, dvc_remote.env_token())
+    _register_secret(report, os.getenv("AWS_SECRET_ACCESS_KEY"))
+    injected_secret = False
+    try:
+        removed = dvc_remote.sanitize(ROOT)
+        if removed:
+            report.attempts.append(
+                {
+                    "strategy": "dvc config",
+                    "outcome": "removed keys that are invalid for this "
+                    f"{dvc_remote.remote_kind(dvc_remote.remote_url(ROOT))} remote: "
+                    + ", ".join(removed),
+                }
+            )
+        applied, injected_secret = dvc_remote.apply_env_credentials(ROOT)
+        if applied:
+            report.attempts.append(
+                {"strategy": "dvc config", "outcome": "applied credentials from environment: " + ", ".join(applied)}
+            )
+
+        args = ["pull", *targets, "-r", "origin"]
+        if verbose:
+            args.append("-v")
+        result = _dvc(*args)
+        if result.returncode == 0:
+            outcome = "ok"
+        elif "do not exist neither locally nor on remote" in result.stderr:
+            outcome = (
+                "failed: the remote does not have the objects dvc.lock points at "
+                "(the artefact was never pushed) - run `dvc push` or the "
+                "publish-artifacts workflow"
+            )
+        elif "extra keys not allowed" in result.stderr:
+            outcome = "failed: DVC config is still invalid - run `python scripts/dvc_remote.py --fix`"
+        else:
+            outcome = f"failed: {report.redact(result.stderr.strip())[:400]}"
+        report.attempts.append({"strategy": "dvc pull", "outcome": outcome})
+        if result.returncode == 0:
+            return True
+        state = dvc_remote.status(ROOT)
+        if state.credential_source == "none":
+            report.attempts.append(
+                {
+                    "strategy": "dvc auth",
+                    "outcome": "no credentials available: set DAGSHUB_USER_TOKEN (write scope) "
+                    "in the build environment",
+                }
+            )
+        return False
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal
+        report.attempts.append({"strategy": "dvc pull", "outcome": f"error: {report.redact(str(exc))[:300]}"})
+        return False
+    finally:
+        if injected_secret and not keep_credentials:
+            dvc_remote.clear_credentials(ROOT)
 
 
 def _safe_extract(archive: Path, destination: Path) -> None:
@@ -280,10 +263,17 @@ def _print_action_required(report: Report) -> None:
     print("  The service still starts; /api/v1/health reports cicids_model.loaded = false,")
     print("  and POST /api/v1/ingest/cic answers 503. Zeek scoring is unaffected.")
     print()
-    print("  Fix it with either:")
-    print("    1. dvc pull  (DagsHub remote) with DAGSHUB_USER_TOKEN (+ DAGSHUB_USERNAME) set,")
-    print("       or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the DagsHub repo settings.")
-    print("    2. MODEL_ARTIFACTS_URL pointing at a tar.gz/zip that contains models/.")
+    kind = dvc_remote.remote_kind(dvc_remote.remote_url(ROOT))
+    if kind == "http":
+        print("  Publish them once with `python scripts/dvc_publish.py`, which repairs the")
+        print("  remote config, locks the artefacts and verifies the upload. It needs")
+        print("  DAGSHUB_USER_TOKEN (repository write scope) in the environment.")
+    elif kind == "s3":
+        print("  Publish them with `python scripts/dvc_publish.py` using the repo's")
+        print("  AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the DagsHub settings page.")
+    else:
+        print("  Publish them with `python scripts/dvc_publish.py`.")
+    print("  Alternatively set MODEL_ARTIFACTS_URL to a tar.gz/zip that contains models/.")
     print()
     for attempt in report.attempts:
         print(f"  attempt [{attempt['strategy']}]: {attempt['outcome']}")
