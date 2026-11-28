@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from src.serving.zeek_store import ZeekStore
 
@@ -129,12 +129,9 @@ class ZeekIngestionService:
         try:
             from src.serving.zeek_predictor import predict_zeek_event
 
-            return predict_zeek_event(
-                event.get("log_type", "unknown"),
-                event.get("normalized", {}),
-                proto=event.get("proto"),
-                service=event.get("service"),
-            )
+            # The predictor needs the whole envelope: dst_port/proto live at the
+            # top level, the volume counters inside "normalized".
+            return predict_zeek_event(event)
         except Exception as e:  # noqa: BLE001
             log.exception("zeek scoring failed: %s", e)
             return {
@@ -144,7 +141,22 @@ class ZeekIngestionService:
                 "is_attack": False,
                 "confidence": None,
                 "probabilities": None,
+                "schema_version": None,
             }
+
+    def status(self) -> dict[str, Any]:
+        """Live state for the API's status endpoint and the dashboard."""
+
+        return {
+            "enabled": True,
+            "running": bool(self._task and not self._task.done()),
+            "log_dir": str(self.log_dir),
+            "log_dir_exists": self.log_dir.exists(),
+            "log_file_count": len(self.discover_log_files()),
+            "sensor_id": self.sensor_id,
+            "log_types": list(self.log_types),
+            "poll_interval_s": self.poll_interval,
+        }
 
     def ingest_once(self) -> dict[str, int]:
         totals = {"inserted": 0, "duplicate": 0, "dead_letter": 0, "lines": 0, "files": 0, "scored": 0, "unclassified": 0}

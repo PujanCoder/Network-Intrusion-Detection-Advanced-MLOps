@@ -34,6 +34,7 @@
   <div class="wrap">
     <h1>Real-time NIDS Dashboard</h1>
     <div class="sub">FastAPI + Zeek ingestion + ML inference. CICIDS baseline preserved; Zeek uses separate Zeek-compatible model/schema.</div>
+    <div id="banner" style="display:none;margin-bottom:16px;padding:12px 14px;border-radius:10px;border:1px solid #7f1d1d;background:rgba(239,68,68,.12);font-size:13px;"></div>
 
     <div class="grid">
       <div class="card"><div class="k">Zeek Events</div><div class="v" id="zeekTotal">0</div></div>
@@ -75,50 +76,122 @@ function pill(label, isAttack, status) {
   return `<span class="pill ${isAttack ? 'attack' : 'benign'}">${label}</span>`;
 }
 function fmtTs(ts) { try { return new Date(ts).toLocaleString(); } catch { return ts || ''; } }
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function detailText(detail) {
+  if (!detail) return '';
+  if (typeof detail === 'string') return detail;
+  return detail.message || detail.code || JSON.stringify(detail);
+}
+function showBanner(html) {
+  const el = document.getElementById('banner');
+  if (!html) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'block';
+  el.innerHTML = html;
+}
+
+function renderModel(health) {
+  const el = document.getElementById('modelStatus');
+  if (!health) { el.innerHTML = '<span class="warn">unknown</span>'; return; }
+  const zeek = health.components.zeek_model;
+  const cicids = health.components.cicids_model;
+  const zeekLine = zeek.loaded
+    ? `<span class="ok">Zeek: loaded</span><div class="small mono">${esc(zeek.features)} feats · ${esc(zeek.schema_version)}</div>`
+    : `<span class="bad">Zeek: not loaded</span><div class="small mono">${esc(zeek.error || 'unknown error')}</div>`;
+  const cicidsLine = cicids.loaded
+    ? '<span class="ok">CICIDS: loaded</span>'
+    : `<span class="warn">CICIDS: unavailable</span><div class="small mono">${esc(cicids.error || 'artefacts absent')}</div>`;
+  el.innerHTML = zeekLine + `<div class="small" style="margin-top:4px"></div>` + cicidsLine;
+}
+
+function renderBanner(health, authError) {
+  const notes = [];
+  if (health && !health.components.auth.configured) {
+    const d = authError ? detailText(authError) : 'No API key is configured on the server.';
+    notes.push(`<strong>Authentication not configured.</strong> ${esc(d)}<br>
+      <span class="small">Set <span class="mono">IDS_API_KEY</span> (or <span class="mono">NDR_API_KEY</span>) in the hosting environment, redeploy,
+      then open this page once as <span class="mono">/?api_key=&lt;value&gt;</span>.</span>`);
+  } else if (health && health.components.auth.configured && !API_KEY) {
+    notes.push(`<strong>API key required.</strong> Open this page as <span class="mono">/?api_key=&lt;value&gt;</span>; the key is stored in this browser only.`);
+  }
+  if (health && !health.components.zeek_model.loaded) {
+    notes.push(`<strong>Zeek model unavailable.</strong> ${esc(health.components.zeek_model.error || '')} — events will be stored as UNCLASSIFIED.`);
+  }
+  showBanner(notes.join('<div style="height:8px"></div>'));
+}
 
 async function refresh() {
+  let health = null;
   try {
-    const [sRes, dRes, hRes] = await Promise.all([
+    const hRes = await fetch('/api/v1/health', {headers: headers()});
+    if (hRes.ok) health = await hRes.json();
+  } catch (e) { /* health stays null; the cards below report it */ }
+
+  renderModel(health);
+
+  let sRes, dRes;
+  try {
+    [sRes, dRes] = await Promise.all([
       fetch('/api/v1/zeek/status', {headers: headers()}),
       fetch('/api/v1/zeek/detections?limit=100', {headers: headers()}),
-      fetch('/api/v1/health', {headers: headers()}).catch(() => null)
     ]);
-    if (!sRes.ok) throw new Error('zeek status ' + sRes.status);
-    if (!dRes.ok) throw new Error('zeek detections ' + dRes.status);
-    const s = await sRes.json();
-    const d = await dRes.json();
-    const h = hRes && hRes.ok ? await hRes.json() : null;
-
-    const counts = s.counts || {};
-    const dets = d.detections || [];
-    const unclassified = dets.filter(x => x.status !== 'scored').length;
-    document.getElementById('zeekTotal').textContent = counts.total ?? 0;
-    document.getElementById('detScored').textContent = counts.detections_scored ?? 0;
-    document.getElementById('detAttacks').textContent = counts.detections_attacks ?? 0;
-    document.getElementById('detUnk').textContent = unclassified;
-    document.getElementById('zeekStatus').innerHTML = (s.sensors && s.sensors.length) ? '<span class="ok">active</span>' : '<span class="warn">idle</span>';
-    document.getElementById('modelStatus').innerHTML = h ? `<span class="ok">CICIDS loaded</span><div class="small mono">${h.model} (${h.model_features} feats)</div><div class="small">Zeek model: see detections</div>` : '<span class="warn">health unavailable</span>';
-    document.getElementById('statusBox').textContent = JSON.stringify(s, null, 2);
-    document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
-
-    const rows = document.getElementById('rows');
-    rows.innerHTML = dets.map(x => `
-      <tr>
-        <td class="mono">${fmtTs(x.ts)}</td>
-        <td class="mono">${x.src_ip || ''}${x.src_port ? ':'+x.src_port : ''}</td>
-        <td class="mono">${x.dst_ip || ''}${x.dst_port ? ':'+x.dst_port : ''}</td>
-        <td>${x.proto || ''}</td>
-        <td>${x.service || ''}</td>
-        <td>${pill(x.label, !!x.is_attack, x.status)}</td>
-        <td>${x.confidence == null ? '' : Number(x.confidence).toFixed(3)}</td>
-        <td>${x.status || ''}</td>
-        <td class="small">${x.reason || ''}</td>
-      </tr>`).join('');
   } catch (e) {
-    document.getElementById('zeekStatus').innerHTML = '<span class="bad">error</span>';
+    document.getElementById('zeekStatus').innerHTML = '<span class="bad">unreachable</span>';
     document.getElementById('statusBox').textContent = String(e);
+    renderBanner(health, null);
+    return;
   }
+
+  if (!sRes.ok || !dRes.ok) {
+    let detail = null;
+    try { detail = (await (sRes.ok ? dRes : sRes).json()).detail; } catch (e) { /* non-JSON body */ }
+    const code = (detail && detail.code) || `HTTP ${sRes.ok ? dRes.status : sRes.status}`;
+    document.getElementById('zeekStatus').innerHTML = `<span class="bad">blocked</span><div class="small">${esc(code)}</div>`;
+    document.getElementById('statusBox').textContent = JSON.stringify(detail || {}, null, 2);
+    renderBanner(health, detail);
+    document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+    return;
+  }
+
+  renderBanner(health, null);
+  const s = await sRes.json();
+  const d = await dRes.json();
+  const counts = s.counts || {};
+  const dets = d.detections || [];
+  const scored = counts.detections_scored ?? dets.filter(x => x.status === 'scored').length;
+  const total = counts.detections_total ?? dets.length;
+
+  document.getElementById('zeekTotal').textContent = counts.total ?? 0;
+  document.getElementById('detScored').textContent = scored;
+  document.getElementById('detAttacks').textContent = counts.detections_attacks ?? 0;
+  document.getElementById('detUnk').textContent = Math.max(total - scored, 0);
+
+  const ingestion = s.ingestion || {};
+  const sensors = s.sensors || [];
+  let label, cls;
+  if (ingestion.running) { label = 'active'; cls = 'ok'; }
+  else if (ingestion.enabled) { label = sensors.length ? 'idle' : 'idle (no sensor)'; cls = 'warn'; }
+  else { label = 'pull mode'; cls = 'warn'; }
+  document.getElementById('zeekStatus').innerHTML = `<span class="${cls}">${label}</span>`;
+
+  document.getElementById('statusBox').textContent = JSON.stringify(s, null, 2);
+  document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+
+  document.getElementById('rows').innerHTML = dets.map(x => `
+    <tr>
+      <td class="mono">${esc(fmtTs(x.ts))}</td>
+      <td class="mono">${esc(x.src_ip)}${x.src_port ? ':' + esc(x.src_port) : ''}</td>
+      <td class="mono">${esc(x.dst_ip)}${x.dst_port ? ':' + esc(x.dst_port) : ''}</td>
+      <td>${esc(x.proto)}</td>
+      <td>${esc(x.service)}</td>
+      <td>${pill(esc(x.label), !!x.is_attack, x.status)}</td>
+      <td>${x.confidence == null ? '' : Number(x.confidence).toFixed(3)}</td>
+      <td>${esc(x.status)}</td>
+      <td class="small">${esc(x.reason)}</td>
+    </tr>`).join('');
 }
+
 refresh();
 setInterval(refresh, 3000);
 </script>
